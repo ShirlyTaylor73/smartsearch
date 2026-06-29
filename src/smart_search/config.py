@@ -32,6 +32,7 @@ class Config:
         "OPENAI_COMPATIBLE_API_URL",
         "OPENAI_COMPATIBLE_API_KEY",
         "OPENAI_COMPATIBLE_MODEL",
+        "OPENAI_COMPATIBLE_FALLBACK_MODELS",
         "OPENAI_COMPATIBLE_STREAM",
         "SMART_SEARCH_VALIDATION_LEVEL",
         "SMART_SEARCH_FALLBACK_MODE",
@@ -244,6 +245,7 @@ class Config:
             "OPENAI_COMPATIBLE_API_URL",
             "OPENAI_COMPATIBLE_API_KEY",
             "OPENAI_COMPATIBLE_MODEL",
+            "OPENAI_COMPATIBLE_FALLBACK_MODELS",
             "OPENAI_COMPATIBLE_STREAM",
             "SMART_SEARCH_VALIDATION_LEVEL",
             "SMART_SEARCH_FALLBACK_MODE",
@@ -270,6 +272,7 @@ class Config:
             "OPENAI_COMPATIBLE_API_URL",
             "OPENAI_COMPATIBLE_API_KEY",
             "OPENAI_COMPATIBLE_MODEL",
+            "OPENAI_COMPATIBLE_FALLBACK_MODELS",
             "OPENAI_COMPATIBLE_STREAM",
             "SMART_SEARCH_VALIDATION_LEVEL",
             "SMART_SEARCH_FALLBACK_MODE",
@@ -336,6 +339,24 @@ class Config:
     def openai_compatible_model(self) -> str:
         model = self._get_config_value("OPENAI_COMPATIBLE_MODEL") or self._base_model_value()
         return self.apply_model_suffix_for_url(model, self.openai_compatible_api_url or "")
+
+    @property
+    def openai_compatible_fallback_models(self) -> list[str]:
+        raw = self._get_config_value("OPENAI_COMPATIBLE_FALLBACK_MODELS", "") or ""
+        models: list[str] = []
+        seen: set[str] = set()
+        api_url = self.openai_compatible_api_url or ""
+        primary = self.openai_compatible_model
+        for item in raw.split(","):
+            model = item.strip()
+            if not model:
+                continue
+            model = self.apply_model_suffix_for_url(model, api_url)
+            if model == primary or model in seen:
+                continue
+            seen.add(model)
+            models.append(model)
+        return models
 
     @property
     def openai_compatible_stream(self) -> bool:
@@ -730,6 +751,7 @@ class Config:
             "OPENAI_COMPATIBLE_API_URL": self.openai_compatible_api_url or "未配置",
             "OPENAI_COMPATIBLE_API_KEY": self._mask_api_key(self.openai_compatible_api_key) if self.openai_compatible_api_key else "未配置",
             "OPENAI_COMPATIBLE_MODEL": self.openai_compatible_model,
+            "OPENAI_COMPATIBLE_FALLBACK_MODELS": ",".join(self.openai_compatible_fallback_models),
             "OPENAI_COMPATIBLE_STREAM": self.openai_compatible_stream,
             "SMART_SEARCH_VALIDATION_LEVEL": validation_level,
             "SMART_SEARCH_FALLBACK_MODE": fallback_mode,

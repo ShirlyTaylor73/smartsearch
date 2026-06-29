@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import contextlib
 import getpass
+import inspect
 import json
 from importlib import metadata
 import subprocess
@@ -753,6 +754,9 @@ def _format_model_markdown(data: dict[str, Any]) -> str:
         rows.append(["xai-responses", data.get("xai_model")])
     if data.get("openai_compatible_model"):
         rows.append(["openai-compatible", data.get("openai_compatible_model")])
+    fallback_models = data.get("openai_compatible_fallback_models") or []
+    if fallback_models:
+        rows.append(["openai-compatible fallback", ", ".join(fallback_models)])
     if data.get("current_model"):
         rows.append(["current", data.get("current_model")])
     if rows:
@@ -1794,6 +1798,13 @@ def _prompt_main_search(values: dict[str, str], current: dict[str, str], lang: s
             optional=True,
             lang=lang,
         )
+        values["OPENAI_COMPATIBLE_FALLBACK_MODELS"] = _prompt_value(
+            "OPENAI_COMPATIBLE_FALLBACK_MODELS",
+            _t(lang, "OpenAI-compatible 备用模型（逗号分隔，可留空）", "OpenAI-compatible fallback models (comma-separated, optional)"),
+            current.get("OPENAI_COMPATIBLE_FALLBACK_MODELS", ""),
+            optional=True,
+            lang=lang,
+        )
         stream_default = current.get("OPENAI_COMPATIBLE_STREAM", "")
         if _prompt_yes_no(
             _t(
@@ -2303,6 +2314,7 @@ def _run_advanced_setup_prompts(values: dict[str, str], current: dict[str, str],
         ("OPENAI_COMPATIBLE_API_URL", "OpenAI-compatible API URL", True),
         ("OPENAI_COMPATIBLE_API_KEY", "OpenAI-compatible API key", True),
         ("OPENAI_COMPATIBLE_MODEL", "OpenAI-compatible model", True),
+        ("OPENAI_COMPATIBLE_FALLBACK_MODELS", "OpenAI-compatible fallback models (comma-separated)", True),
         ("OPENAI_COMPATIBLE_STREAM", "OpenAI-compatible stream mode (true/false)", True),
         ("SMART_SEARCH_VALIDATION_LEVEL", "Validation level (fast/balanced/strict)", True),
         ("SMART_SEARCH_FALLBACK_MODE", "Fallback mode (auto/off)", True),
@@ -2368,6 +2380,8 @@ async def _run_async(args: argparse.Namespace) -> int:
         }
         if args.stream is not None:
             search_kwargs["stream"] = args.stream
+        if "timeout_seconds" in inspect.signature(service.search).parameters:
+            search_kwargs["timeout_seconds"] = args.timeout
         try:
             data = await asyncio.wait_for(
                 service.search(args.query, **search_kwargs),
@@ -2567,6 +2581,7 @@ def _run_setup(args: argparse.Namespace) -> int:
         "OPENAI_COMPATIBLE_API_URL": args.openai_compatible_api_url,
         "OPENAI_COMPATIBLE_API_KEY": args.openai_compatible_api_key,
         "OPENAI_COMPATIBLE_MODEL": args.openai_compatible_model,
+        "OPENAI_COMPATIBLE_FALLBACK_MODELS": args.openai_compatible_fallback_models,
         "OPENAI_COMPATIBLE_STREAM": args.openai_compatible_stream,
         "SMART_SEARCH_VALIDATION_LEVEL": args.validation_level,
         "SMART_SEARCH_FALLBACK_MODE": args.fallback_mode,
@@ -3041,6 +3056,7 @@ def build_parser() -> argparse.ArgumentParser:
     setup_parser.add_argument("--openai-compatible-api-url", default="", help="Save OPENAI_COMPATIBLE_API_URL.")
     setup_parser.add_argument("--openai-compatible-api-key", default="", help="Save OPENAI_COMPATIBLE_API_KEY.")
     setup_parser.add_argument("--openai-compatible-model", default="", help="Save OPENAI_COMPATIBLE_MODEL.")
+    setup_parser.add_argument("--openai-compatible-fallback-models", default="", help="Save OPENAI_COMPATIBLE_FALLBACK_MODELS.")
     setup_parser.add_argument("--openai-compatible-stream", default="", help="Save OPENAI_COMPATIBLE_STREAM.")
     setup_parser.add_argument("--validation-level", default="", help="Save SMART_SEARCH_VALIDATION_LEVEL.")
     setup_parser.add_argument("--fallback-mode", default="", help="Save SMART_SEARCH_FALLBACK_MODE.")
