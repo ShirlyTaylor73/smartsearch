@@ -1,12 +1,12 @@
 ## 1. 契约基线与失败测试
 
-- [ ] 1.1 重新核对 proposal、design 和三份 spec，记录现有 CLI、service、配置、README、skill 和测试的能力映射基线
-- [ ] 1.2 在 `tests/` 先添加失败测试，约束四大命名空间及完整 operation：`search answer|sources|similar`、`docs resolve|search|tree|read`、`fetch content|extract`、`map site`
-- [ ] 1.3 添加统一 envelope、operation 特有字段、默认隐藏 provider metadata 和跨平台输出测试
-- [ ] 1.4 添加 operation feature negotiation、同 operation fallback 和禁止跨 operation 替代的失败测试
-- [ ] 1.5 添加完整 diagnose/dev 命令树与旧命令迁移测试
-- [ ] 1.6 添加 AnySearch/vertical 与 Deep Research 命令、配置、service 路径不存在的失败测试
-- [ ] 1.7 提交“新版 CLI operation 契约测试”阶段 commit
+- [x] 1.1 重新核对 proposal、design 和三份 spec，记录现有 CLI、service、配置、README、skill 和测试的能力映射基线
+- [x] 1.2 在 `tests/` 先添加失败测试，约束四大命名空间及完整 operation：`search answer|sources|similar`、`docs resolve|search|tree|read`、`fetch content|extract`、`map site`
+- [x] 1.3 添加统一 envelope、operation 特有字段、默认隐藏 provider metadata 和跨平台输出测试
+- [x] 1.4 添加 operation feature negotiation、同 operation fallback 和禁止跨 operation 替代的失败测试
+- [x] 1.5 添加完整 diagnose/dev 命令树与旧命令迁移测试
+- [x] 1.6 添加 AnySearch/vertical 与 Deep Research 命令、配置、service 路径不存在的失败测试
+- [x] 1.7 提交“新版 CLI operation 契约测试”阶段 commit
 
 ## 2. 移除 AnySearch 与 Deep Research
 

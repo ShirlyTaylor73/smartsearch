@@ -37,8 +37,7 @@ class Config:
         "SMART_SEARCH_VALIDATION_LEVEL",
         "SMART_SEARCH_FALLBACK_MODE",
         "SMART_SEARCH_MINIMUM_PROFILE",
-        "SMART_SEARCH_RESEARCH_PREFERRED_PROVIDERS",
-        "SMART_SEARCH_RESEARCH_DISABLED_PROVIDERS",
+        "SMART_SEARCH_OPERATION_CONFIG",
         "SMART_SEARCH_INTENT_ROUTER",
         "INTENT_EMBEDDING_API_URL",
         "INTENT_EMBEDDING_API_KEY",
@@ -74,9 +73,6 @@ class Config:
         "TAVILY_TIMEOUT_SECONDS",
         "FIRECRAWL_API_KEY",
         "FIRECRAWL_API_URL",
-        "ANYSEARCH_API_KEY",
-        "ANYSEARCH_API_URL",
-        "ANYSEARCH_TIMEOUT_SECONDS",
         "SMART_SEARCH_DEBUG",
         "SMART_SEARCH_LOG_LEVEL",
         "SMART_SEARCH_LOG_DIR",
@@ -502,12 +498,23 @@ class Config:
         return values
 
     @property
+    def operation_config(self) -> dict[str, dict]:
+        raw = self._get_config_value("SMART_SEARCH_OPERATION_CONFIG", "{}") or "{}"
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid SMART_SEARCH_OPERATION_CONFIG: {exc}") from exc
+        if not isinstance(value, dict):
+            raise ValueError("Invalid SMART_SEARCH_OPERATION_CONFIG: expected a JSON object")
+        return {str(key): item for key, item in value.items() if isinstance(item, dict)}
+
+    @property
     def research_preferred_providers(self) -> list[str]:
-        return self._csv_values("SMART_SEARCH_RESEARCH_PREFERRED_PROVIDERS")
+        return []
 
     @property
     def research_disabled_providers(self) -> list[str]:
-        return self._csv_values("SMART_SEARCH_RESEARCH_DISABLED_PROVIDERS")
+        return []
 
     @property
     def tavily_enabled(self) -> bool:
@@ -532,18 +539,6 @@ class Config:
     @property
     def firecrawl_api_key(self) -> str | None:
         return self._get_config_value("FIRECRAWL_API_KEY")
-
-    @property
-    def anysearch_api_url(self) -> str:
-        return self._get_config_value("ANYSEARCH_API_URL", "https://api.anysearch.com/mcp") or "https://api.anysearch.com/mcp"
-
-    @property
-    def anysearch_api_key(self) -> str | None:
-        return self._get_config_value("ANYSEARCH_API_KEY")
-
-    @property
-    def anysearch_timeout(self) -> float:
-        return float(self._get_config_value("ANYSEARCH_TIMEOUT_SECONDS", "30") or "30")
 
     @property
     def log_level(self) -> str:
@@ -756,8 +751,7 @@ class Config:
             "SMART_SEARCH_VALIDATION_LEVEL": validation_level,
             "SMART_SEARCH_FALLBACK_MODE": fallback_mode,
             "SMART_SEARCH_MINIMUM_PROFILE": minimum_profile,
-            "SMART_SEARCH_RESEARCH_PREFERRED_PROVIDERS": ",".join(self.research_preferred_providers),
-            "SMART_SEARCH_RESEARCH_DISABLED_PROVIDERS": ",".join(self.research_disabled_providers),
+            "SMART_SEARCH_OPERATION_CONFIG": self.operation_config,
             "SMART_SEARCH_INTENT_ROUTER": intent_router_mode,
             "INTENT_EMBEDDING_API_URL": self.intent_embedding_api_url or "未配置",
             "INTENT_EMBEDDING_API_KEY": self._mask_api_key(self.intent_embedding_api_key) if self.intent_embedding_api_key else "未配置",
@@ -780,9 +774,6 @@ class Config:
             "TAVILY_TIMEOUT_SECONDS": self.tavily_timeout,
             "FIRECRAWL_API_URL": self.firecrawl_api_url,
             "FIRECRAWL_API_KEY": self._mask_api_key(self.firecrawl_api_key) if self.firecrawl_api_key else "未配置",
-            "ANYSEARCH_API_URL": self.anysearch_api_url,
-            "ANYSEARCH_API_KEY": self._mask_api_key(self.anysearch_api_key) if self.anysearch_api_key else "未配置",
-            "ANYSEARCH_TIMEOUT_SECONDS": self.anysearch_timeout,
             "SMART_SEARCH_OUTPUT_CLEANUP": self.output_cleanup_enabled,
             "SMART_SEARCH_LOG_TO_FILE": self.log_to_file_enabled,
             "SSL_VERIFY": self.ssl_verify_enabled,

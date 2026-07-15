@@ -10,7 +10,7 @@ from .embedding_presets import embedding_preset_for_model, embedding_threshold_c
 
 
 ALLOWED_INTENT_ROUTER_MODES = {"hybrid", "rules", "off"}
-ROUTABLE_CAPABILITIES = {"docs_search", "web_search", "web_fetch", "vertical_search"}
+ROUTABLE_CAPABILITIES = {"docs_search", "web_search", "web_fetch"}
 
 DOCS_INTENT_KEYWORDS = {
     "api",
@@ -334,7 +334,7 @@ def extract_urls(query: str) -> list[str]:
 
 
 def _ordered_capabilities(capabilities: set[str]) -> list[str]:
-    order = ["docs_search", "web_search", "web_fetch", "vertical_search"]
+    order = ["docs_search", "web_search", "web_fetch"]
     return [capability for capability in order if capability in capabilities]
 
 
@@ -358,7 +358,6 @@ def build_rules_route(
         or contains_any(query, CURRENT_INTENT_KEYWORDS)
     )
     fetch_intent = bool(plan_intent_signals.get("known_url")) or bool(urls) or contains_any(query, FETCH_INTENT_KEYWORDS)
-    vertical_intent = contains_any(query, VERTICAL_INTENT_KEYWORDS)
 
     capabilities: set[str] = set()
     supplemental_paths: list[str] = []
@@ -380,15 +379,12 @@ def build_rules_route(
         add_capability("web_search", "strict validation requires source reinforcement", 0.72)
     if fetch_intent:
         add_capability("web_fetch", "rules matched a known URL or fetch request", 0.95 if urls else 0.78)
-    if vertical_intent:
-        add_capability("vertical_search", "rules matched vertical-domain terms", 0.72)
 
     confidence = max(signal_scores.values(), default=0.35)
     intent_signals: dict[str, Any] = {
         "docs_api_intent": docs_intent,
         "current_or_locale_intent": web_current_intent,
         "known_url": fetch_intent,
-        "vertical_intent": vertical_intent,
         "strict_validation": validation_level == "strict",
         "rule_scores": signal_scores,
         "urls": urls,

@@ -32,7 +32,6 @@ from .intent_router import (
     _semantic_summary,
 )
 from .logger import log_info
-from .providers.anysearch import AnySearchProvider
 from .providers.context7 import Context7Provider
 from .providers.exa import ExaSearchProvider
 from .providers.jina import JinaReaderProvider
@@ -161,7 +160,6 @@ RESEARCH_PROFILE_ORDER = {
     "web_search": ["zhipu", "zhipu-mcp", "tavily", "firecrawl"],
     "docs_search": ["context7", "exa"],
     "web_fetch": ["tavily", "jina", "zhipu-mcp-reader", "firecrawl"],
-    "vertical_search": ["anysearch"],
     "site_map": ["tavily"],
     "synthesis": ["main-search"],
 }
@@ -258,16 +256,6 @@ PROVIDER_PROFILES: dict[str, dict[str, Any]] = {
         "quality_filters": ["non-empty normalized result", "non-empty extracted content"],
         "route_reasons": ["JS-heavy fetch", "dynamic/browser-like extraction", "robust fetch fallback"],
     },
-    "anysearch": {
-        "capability": "vertical_search",
-        "strengths": ["CVE", "finance", "legal", "academic", "code/docs", "structured vertical domains"],
-        "exclusions": ["generic default fallback", "standard minimum profile"],
-        "fallback_group": "vertical_search",
-        "minimum_profile_role": "",
-        "quality_filters": ["vertical intent required", "URL required before evidence citation"],
-        "route_reasons": ["vertical domain discovery"],
-        "experimental": True,
-    },
     "main-search": {
         "capability": "synthesis",
         "strengths": ["evidence-only final synthesis"],
@@ -279,6 +267,35 @@ PROVIDER_PROFILES: dict[str, dict[str, Any]] = {
     },
 }
 MAIN_SEARCH_FALLBACK_CHAIN = ["xai-responses", "openai-compatible"]
+OPERATION_PROFILES: dict[str, dict[str, Any]] = {
+    "search.answer": {"providers": ["xai-responses", "openai-compatible"], "features": set()},
+    "search.sources": {"providers": ["exa", "zhipu", "zhipu-mcp", "tavily", "firecrawl"], "features": set()},
+    "search.similar": {"providers": ["exa"], "features": set()},
+    "docs.resolve": {"providers": ["context7"], "features": set()},
+    "docs.search": {"providers": ["context7", "exa", "zhipu-mcp-zread"], "features": set()},
+    "docs.tree": {"providers": ["zhipu-mcp-zread"], "features": set()},
+    "docs.read": {"providers": ["zhipu-mcp-zread"], "features": set()},
+    "fetch.content": {"providers": ["tavily", "jina", "zhipu-mcp-reader", "firecrawl"], "features": set()},
+    "fetch.extract": {"providers": ["firecrawl"], "features": {"structured", "max_length"}},
+    "map.site": {"providers": ["tavily"], "features": {"instructions", "max_depth", "max_breadth", "limit", "timeout"}},
+}
+PROVIDER_OPERATION_FEATURES: dict[str, dict[str, set[str]]] = {
+    "exa": {
+        "search.sources": {"semantic", "keyword", "auto", "time", "domains", "category", "text", "highlights", "limit"},
+        "search.similar": {"limit"},
+        "docs.search": {"domains", "highlights", "limit"},
+    },
+    "zhipu": {"search.sources": {"time", "domains", "limit"}},
+    "zhipu-mcp": {"search.sources": {"limit"}},
+    "tavily": {"search.sources": {"limit"}, "fetch.content": set(), "map.site": OPERATION_PROFILES["map.site"]["features"]},
+    "firecrawl": {"search.sources": {"limit"}, "fetch.content": set(), "fetch.extract": {"structured", "max_length"}},
+    "context7": {"docs.resolve": set(), "docs.search": set()},
+    "zhipu-mcp-zread": {"docs.search": set(), "docs.tree": {"path", "ref"}, "docs.read": {"ref"}},
+    "jina": {"fetch.content": set()},
+    "zhipu-mcp-reader": {"fetch.content": set()},
+    "xai-responses": {"search.answer": set()},
+    "openai-compatible": {"search.answer": {"stream"}},
+}
 MAIN_SEARCH_PROVIDER_ALIASES = {
     "xai-responses": {"xai-responses", "xai", "grok", "grok-web-tools"},
     "openai-compatible": {"openai-compatible", "openai", "chat-completions", "primary"},
@@ -541,6 +558,79 @@ def provider_profiles() -> dict[str, dict[str, Any]]:
     return {provider: dict(profile) for provider, profile in PROVIDER_PROFILES.items()}
 
 
+def operation_profiles() -> dict[str, dict[str, Any]]:
+    return {
+        operation: {
+            "providers": list(profile["providers"]),
+            "features": sorted(profile.get("features", set())),
+        }
+        for operation, profile in OPERATION_PROFILES.items()
+    }
+
+
+def _operation_provider_configured(provider: str) -> bool:
+    if provider == "zhipu-mcp-zread":
+        return bool(config.zhipu_mcp_api_key)
+    return _provider_configured(provider)
+
+
+def operation_candidates(
+    operation: str,
+    *,
+    required_features: set[str] | None = None,
+) -> tuple[list[str], set[str]]:
+    profile = OPERATION_PROFILES.get(operation)
+    if not profile:
+        return [], set(required_features or set())
+    operation_config = config.operation_config.get(operation, {})
+    configured_order = operation_config.get("providers")
+    providers = list(configured_order) if isinstance(configured_order, list) else list(profile["providers"])
+    disabled = set(operation_config.get("disabled") or [])
+    required = set(required_features or set())
+    candidates: list[str] = []
+    missing = set(required)
+    for provider in providers:
+        provider = str(provider).strip().lower()
+        if provider in disabled or provider not in profile["providers"] or not _operation_provider_configured(provider):
+            continue
+        supported = PROVIDER_OPERATION_FEATURES.get(provider, {}).get(operation, set())
+        if required.issubset(supported):
+            candidates.append(provider)
+            missing.clear()
+    return candidates, missing
+
+
+def _operation_envelope(
+    capability: str,
+    operation: str,
+    *,
+    ok: bool,
+    start: float,
+    content: str = "",
+    sources: list[dict[str, Any]] | None = None,
+    error_type: str = "",
+    error: str = "",
+    extra: dict[str, Any] | None = None,
+    debug: bool = False,
+) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "ok": ok,
+        "capability": capability,
+        "operation": operation,
+        "content": content,
+        "sources": sources or [],
+        "elapsed_ms": _elapsed_ms(start),
+    }
+    if not ok:
+        data.update({"error_type": error_type or "runtime_error", "error": error or "operation failed"})
+    if extra:
+        data.update(extra)
+    if not debug:
+        for key in ("provider_attempts", "providers_used", "routing_decision", "capability_status", "minimum_profile_ok", "fallback_used", "transport_fallback_used", "model_fallback_used"):
+            data.pop(key, None)
+    return data
+
+
 def intent_router_status() -> dict[str, Any]:
     return IntentRouter(config).status()
 
@@ -572,8 +662,6 @@ def _provider_configured(provider: str) -> bool:
         return bool(config.zhipu_mcp_api_key)
     if provider == "firecrawl":
         return bool(config.firecrawl_api_key)
-    if provider == "anysearch":
-        return bool(config.anysearch_api_key)
     if provider == "main-search":
         return bool(config.xai_api_key or (config.openai_compatible_api_url and config.openai_compatible_api_key))
     return False
@@ -1470,13 +1558,8 @@ def get_capability_status() -> dict[str, Any]:
             ],
             "fallback_chain": ["tavily", "jina", "zhipu-mcp-reader", "firecrawl"],
         },
-        "vertical_search": {
-            "configured": ["anysearch"] if config.anysearch_api_key else [],
-            "fallback_chain": ["anysearch"],
-            "experimental": True,
-        },
     }
-    for capability in ("web_search", "docs_search", "web_fetch", "vertical_search"):
+    for capability in ("web_search", "docs_search", "web_fetch"):
         status[capability]["ok"] = bool(status[capability]["configured"])
     return status
 
@@ -1832,37 +1915,6 @@ async def _run_docs_search_fallback(
                 attempts.append(_attempt("docs_search", provider, status, start, error_type=data.get("error_type", ""), error=data.get("error", "")))
         except Exception as e:
             attempts.append(_attempt("docs_search", provider, "error", start, error_type="runtime_error", error=str(e)))
-    return [], attempts
-
-
-async def _run_vertical_search_fallback(
-    query: str,
-    providers: str = "auto",
-    fallback: str = "auto",
-) -> tuple[list[dict], list[dict]]:
-    provider_filter = _parse_provider_filter(providers)
-    attempts: list[dict] = []
-    configured: list[str] = []
-    if config.anysearch_api_key:
-        configured.append("anysearch")
-    if provider_filter is not None:
-        configured = [p for p in configured if p in provider_filter]
-    if fallback == "off":
-        configured = configured[:1]
-
-    for provider in configured:
-        start = time.time()
-        try:
-            data = await anysearch_search(query, max_results=5)
-            if data.get("ok"):
-                sources = _normalize_source_results(data.get("results"), "anysearch")
-                if sources:
-                    attempts.append(_attempt("vertical_search", provider, "ok", start, result_count=len(sources)))
-                    return sources, attempts
-            status = "error" if data.get("error_type") in {"auth_error", "provider_error", "rate_limited", "timeout", "network_error", "runtime_error"} else "empty"
-            attempts.append(_attempt("vertical_search", provider, status, start, error_type=data.get("error_type", ""), error=data.get("error", "")))
-        except Exception as e:
-            attempts.append(_attempt("vertical_search", provider, "error", start, error_type="runtime_error", error=str(e)))
     return [], attempts
 
 
@@ -2295,10 +2347,6 @@ async def search(
             provider_attempts.extend(fetch_attempts)
             if fetch_result:
                 supplemental_sources.append({"url": fetch_result["url"], "provider": fetch_result["provider"], "description": fetch_result["content"][:300]})
-        if "vertical_search" in supplemental_paths:
-            vertical_sources, vertical_attempts = await _run_vertical_search_fallback(query, providers=providers, fallback=fallback_mode)
-            provider_attempts.extend(vertical_attempts)
-            supplemental_sources.extend(vertical_sources)
 
     extra_source_items = merge_sources(extra_source_items, supplemental_sources)
     sources = merge_sources(primary_sources, extra_source_items)
@@ -3008,40 +3056,11 @@ async def exa_search(
     return data
 
 
-def _anysearch_provider() -> AnySearchProvider:
-    return AnySearchProvider(config.anysearch_api_url, config.anysearch_api_key, config.anysearch_timeout)
-
-
-async def _decode_provider_json(raw: str, provider: str = "anysearch") -> dict[str, Any]:
+async def _decode_provider_json(raw: str, provider: str = "provider") -> dict[str, Any]:
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
         return {"ok": False, "provider": provider, "error_type": "parse_error", "error": raw}
-
-
-async def anysearch_domains(domain: str = "") -> dict[str, Any]:
-    return await _decode_provider_json(await _anysearch_provider().list_domains(domain))
-
-
-async def anysearch_search(query: str, domain: str = "", sub_domain: str = "", max_results: int = 5) -> dict[str, Any]:
-    return await _decode_provider_json(
-        await _anysearch_provider().vertical_search(
-            query=query,
-            domain=domain,
-            sub_domain=sub_domain,
-            max_results=max_results,
-        )
-    )
-
-
-async def anysearch_extract(url: str, max_length: int = 20000) -> dict[str, Any]:
-    return await _decode_provider_json(await _anysearch_provider().extract(url, max_length=max_length))
-
-
-async def anysearch_batch(queries: list[str], max_results: int = 3) -> dict[str, Any]:
-    return await _decode_provider_json(await _anysearch_provider().batch_search(queries, max_results=max_results))
-
-
 def _zhipu_mcp_search_provider() -> ZhipuMCPProvider:
     return ZhipuMCPProvider(
         config.zhipu_mcp_search_api_url,
@@ -3187,6 +3206,215 @@ async def context7_docs(library_id: str, query: str) -> dict[str, Any]:
     if not data.get("ok", False):
         data.setdefault("error_type", "network_error")
     return data
+
+
+async def search_answer(query: str, *, stream: bool | None = None, timeout_seconds: float | None = None, debug: bool = False) -> dict[str, Any]:
+    start = time.time()
+    data = await search(query, stream=stream, timeout_seconds=timeout_seconds)
+    return _operation_envelope(
+        "search",
+        "answer",
+        ok=bool(data.get("ok")),
+        start=start,
+        content=data.get("content", ""),
+        sources=data.get("sources") or [],
+        error_type=data.get("error_type", ""),
+        error=data.get("error", ""),
+        extra=data,
+        debug=debug,
+    )
+
+
+async def search_sources(
+    query: str,
+    *,
+    limit: int = 5,
+    mode: str = "auto",
+    start_published_date: str = "",
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
+    category: str = "",
+    include_text: bool = False,
+    include_highlights: bool = False,
+    debug: bool = False,
+) -> dict[str, Any]:
+    start = time.time()
+    required: set[str] = set()
+    if mode in {"semantic", "keyword"}:
+        required.add(mode)
+    if start_published_date:
+        required.add("time")
+    if include_domains or exclude_domains:
+        required.add("domains")
+    if category:
+        required.add("category")
+    if include_text:
+        required.add("text")
+    if include_highlights:
+        required.add("highlights")
+    candidates, missing = operation_candidates("search.sources", required_features=required)
+    if not candidates:
+        error_type = "capability_error" if missing else "config_error"
+        detail = f"; missing features: {', '.join(sorted(missing))}" if missing else ""
+        return _operation_envelope("search", "sources", ok=False, start=start, error_type=error_type, error=f"No configured provider supports search.sources{detail}")
+    attempts: list[dict[str, Any]] = []
+    for provider in candidates:
+        attempt_start = time.time()
+        if provider == "exa":
+            data = await exa_search(
+                query,
+                num_results=limit,
+                search_type="neural" if mode == "semantic" else mode,
+                include_text=include_text,
+                include_highlights=include_highlights,
+                start_published_date=start_published_date,
+                include_domains=include_domains or "",
+                exclude_domains=exclude_domains or "",
+                category=category,
+            )
+            results = _normalize_source_results(data.get("results"), provider) if data.get("ok") else []
+        elif provider == "zhipu":
+            data = await zhipu_search(query, count=limit, search_recency_filter=start_published_date or "noLimit", search_domain_filter=(include_domains or [""])[0])
+            results = _normalize_source_results(data.get("results"), provider) if data.get("ok") else []
+        elif provider == "zhipu-mcp":
+            data = await zhipu_mcp_search(query, count=limit)
+            results = _normalize_source_results(data.get("results"), provider) if data.get("ok") else []
+        elif provider == "tavily":
+            raw = await call_tavily_search(query, limit)
+            data = {"ok": bool(raw)}
+            results = _normalize_source_results(raw, provider)
+        else:
+            raw = await call_firecrawl_search(query, limit)
+            data = {"ok": bool(raw)}
+            results = _normalize_source_results(raw, provider)
+        if results:
+            attempts.append(_attempt("search.sources", provider, "ok", attempt_start, result_count=len(results)))
+            return _operation_envelope("search", "sources", ok=True, start=start, sources=results, extra={"results": results, "provider_attempts": attempts}, debug=debug)
+        attempts.append(_attempt("search.sources", provider, "error" if data.get("error") else "empty", attempt_start, error_type=data.get("error_type", ""), error=data.get("error", "")))
+    return _operation_envelope("search", "sources", ok=False, start=start, error_type="network_error", error="All search.sources providers failed", extra={"provider_attempts": attempts}, debug=debug)
+
+
+async def search_similar(url: str, *, limit: int = 5, debug: bool = False) -> dict[str, Any]:
+    start = time.time()
+    candidates, _ = operation_candidates("search.similar")
+    if not candidates:
+        return _operation_envelope("search", "similar", ok=False, start=start, error_type="config_error", error="No configured provider supports search.similar")
+    data = await exa_find_similar(url, num_results=limit)
+    results = _normalize_source_results(data.get("results"), "exa") if data.get("ok") else []
+    return _operation_envelope("search", "similar", ok=bool(results), start=start, sources=results, error_type=data.get("error_type", "network_error"), error=data.get("error", ""), extra={"results": results}, debug=debug)
+
+
+async def docs_resolve(name: str, query: str = "", *, debug: bool = False) -> dict[str, Any]:
+    start = time.time()
+    candidates, _ = operation_candidates("docs.resolve")
+    if not candidates:
+        return _operation_envelope("docs", "resolve", ok=False, start=start, error_type="config_error", error="No configured provider supports docs.resolve")
+    data = await context7_library(name, query)
+    rows = data.get("results") or []
+    candidates_out = [{"id": row.get("id", ""), "title": row.get("title") or row.get("name") or row.get("id", ""), "description": row.get("description", "")} for row in rows]
+    return _operation_envelope("docs", "resolve", ok=bool(data.get("ok")), start=start, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"candidates": candidates_out}, debug=debug)
+
+
+async def docs_search(query: str, *, source: str = "", debug: bool = False) -> dict[str, Any]:
+    start = time.time()
+    candidates, _ = operation_candidates("docs.search")
+    if source and "/" in source:
+        candidates = [provider for provider in candidates if provider == "zhipu-mcp-zread"] + [provider for provider in candidates if provider != "zhipu-mcp-zread"]
+    attempts: list[dict[str, Any]] = []
+    for provider in candidates:
+        attempt_start = time.time()
+        if provider == "zhipu-mcp-zread" and source:
+            data = await zhipu_mcp_search_doc(source, query)
+            results = _normalize_source_results(data.get("results"), provider) if data.get("ok") else []
+        elif provider == "context7":
+            library_id = source
+            if not library_id:
+                resolved = await context7_library(query, query)
+                library_id = next((row.get("id", "") for row in resolved.get("results", []) if row.get("id")), "")
+            data = await context7_docs(library_id, query) if library_id else {"ok": False, "error": "library not resolved"}
+            results = _normalize_source_results(data.get("results"), provider) if data.get("ok") else []
+        elif provider == "exa":
+            data = await exa_search(query, num_results=5, include_highlights=True, include_domains=[source] if source and "." in source and "/" not in source else "")
+            results = _normalize_source_results(data.get("results"), provider) if data.get("ok") else []
+        else:
+            continue
+        if results:
+            attempts.append(_attempt("docs.search", provider, "ok", attempt_start, result_count=len(results)))
+            return _operation_envelope("docs", "search", ok=True, start=start, sources=results, extra={"results": results, "provider_attempts": attempts}, debug=debug)
+        attempts.append(_attempt("docs.search", provider, "empty", attempt_start, error=data.get("error", "")))
+    return _operation_envelope("docs", "search", ok=False, start=start, error_type="config_error" if not candidates else "network_error", error="No docs.search provider returned results", extra={"provider_attempts": attempts}, debug=debug)
+
+
+async def docs_tree(repo: str, *, path: str = "", ref: str = "", debug: bool = False) -> dict[str, Any]:
+    start = time.time()
+    candidates, _ = operation_candidates("docs.tree")
+    if not candidates:
+        return _operation_envelope("docs", "tree", ok=False, start=start, error_type="config_error", error="No configured provider supports docs.tree", extra={"entries": []})
+    data = await zhipu_mcp_repo_structure(repo, ref=path or ref)
+    entries = data.get("results") or []
+    return _operation_envelope("docs", "tree", ok=bool(data.get("ok")), start=start, content=data.get("content", ""), error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"entries": entries}, debug=debug)
+
+
+async def docs_read(repo: str, path: str, *, ref: str = "", debug: bool = False) -> dict[str, Any]:
+    start = time.time()
+    candidates, _ = operation_candidates("docs.read")
+    if not candidates:
+        return _operation_envelope("docs", "read", ok=False, start=start, error_type="config_error", error="No configured provider supports docs.read")
+    data = await zhipu_mcp_read_file(repo, path, ref=ref)
+    return _operation_envelope("docs", "read", ok=bool(data.get("ok")), start=start, content=data.get("content", ""), error_type=data.get("error_type", ""), error=data.get("error", ""), sources=[{"title": path, "url": f"repo:{repo}/{path}", "snippet": ""}], debug=debug)
+
+
+async def fetch_content(url: str, *, debug: bool = False) -> dict[str, Any]:
+    start = time.time()
+    data = await fetch(url)
+    sources = [{"title": url, "url": url, "snippet": data.get("content", "")[:300]}] if data.get("ok") else []
+    return _operation_envelope("fetch", "content", ok=bool(data.get("ok")), start=start, content=data.get("content", ""), sources=sources, error_type=data.get("error_type", ""), error=data.get("error", ""), extra=data, debug=debug)
+
+
+async def firecrawl_extract(url: str, *, max_length: int = 20000, schema: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not config.firecrawl_api_key:
+        return {"ok": False, "error_type": "config_error", "error": "FIRECRAWL_API_KEY is not configured"}
+    body: dict[str, Any] = {"url": url, "formats": ["json"], "timeout": 60000}
+    if schema:
+        body["jsonOptions"] = {"schema": schema}
+    try:
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            response = await client.post(f"{config.firecrawl_api_url.rstrip('/')}/scrape", headers={"Authorization": f"Bearer {config.firecrawl_api_key}", "Content-Type": "application/json"}, json=body)
+            response.raise_for_status()
+            payload = response.json().get("data", {})
+        raw = json.dumps(payload, ensure_ascii=False)
+        return {"ok": True, "data": payload.get("json", payload), "raw_evidence": raw[:max_length]}
+    except Exception as exc:
+        return {"ok": False, "error_type": "network_error", "error": str(exc)}
+
+
+async def fetch_extract(url: str, *, max_length: int = 20000, schema: dict[str, Any] | None = None, debug: bool = False) -> dict[str, Any]:
+    start = time.time()
+    candidates, _ = operation_candidates("fetch.extract", required_features={"structured"})
+    if not candidates:
+        return _operation_envelope("fetch", "extract", ok=False, start=start, error_type="config_error", error="No configured provider supports fetch.extract", extra={"data": None})
+    data = await firecrawl_extract(url, max_length=max_length, schema=schema)
+    return _operation_envelope("fetch", "extract", ok=bool(data.get("ok")), start=start, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"data": data.get("data"), "raw_evidence": data.get("raw_evidence", "")}, debug=debug)
+
+
+async def map_site_operation(url: str, **kwargs: Any) -> dict[str, Any]:
+    start = time.time()
+    debug = bool(kwargs.pop("debug", False))
+    candidates, _ = operation_candidates("map.site")
+    if not candidates:
+        return _operation_envelope("map", "site", ok=False, start=start, error_type="config_error", error="No configured provider supports map.site", extra={"entries": []})
+    data = await map_site(url, **kwargs)
+    entries = data.get("results") or []
+    return _operation_envelope("map", "site", ok=bool(data.get("ok")), start=start, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"entries": entries, "results": entries}, debug=debug)
+
+
+async def diagnose_operation(capability: str, operation: str = "") -> dict[str, Any]:
+    operations = [name for name in OPERATION_PROFILES if name.startswith(f"{capability}.") and (not operation or name == f"{capability}.{operation}")]
+    checks = []
+    for name in operations:
+        candidates, _ = operation_candidates(name)
+        checks.append({"operation": name, "configured": candidates, "ok": bool(candidates), "single_provider": len(candidates) == 1})
+    return {"ok": bool(checks) and all(item["ok"] for item in checks), "capability": capability, "operation": operation, "checks": checks}
 
 
 async def _test_primary_chat_completion(api_url: str, api_key: str, model: str) -> dict[str, Any]:

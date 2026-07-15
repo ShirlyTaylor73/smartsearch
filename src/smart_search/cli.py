@@ -45,14 +45,8 @@ COMMAND_ALIASES = {
     "zhipu-mcp-search-doc": ["zmcp-doc"],
     "zhipu-mcp-repo-structure": ["zmcp-tree"],
     "zhipu-mcp-read-file": ["zmcp-file"],
-    "anysearch-domains": ["as-domains"],
-    "anysearch-search": ["as-search", "as"],
-    "anysearch-extract": ["as-extract"],
-    "anysearch-batch": ["as-batch"],
     "context7-library": ["c7", "ctx7"],
     "context7-docs": ["c7d", "c7docs", "ctx7-docs"],
-    "deep": ["dr"],
-    "research": ["rs"],
     "route-calibrate": ["route-cal", "rcal"],
     "smoke": ["sm"],
     "doctor": ["d"],
@@ -881,70 +875,10 @@ def _format_markdown(command: str, data: dict[str, Any]) -> str:
             lines.extend(["", content])
         lines.extend(_error_lines(data))
         return "\n".join(lines).strip() + "\n"
-    if command == "deep":
-        lines = [
-            "# Deep Research Plan",
-            "",
-            f"**Question:** {data.get('question', '')}",
-            f"**Mode:** {data.get('mode', '')}",
-            f"**Difficulty:** {data.get('difficulty', '')}",
-            f"**Evidence policy:** {data.get('evidence_policy', '')}",
-            "",
-            "## Boundary",
-        ]
-        usage_boundary = data.get("usage_boundary") or {}
-        for key in ("search", "deep", "execution"):
-            if usage_boundary.get(key):
-                lines.append(f"- **{key}:** {usage_boundary[key]}")
-        decomposition = data.get("decomposition") or []
-        if decomposition:
-            lines.extend(["", "## Decomposition"])
-            for item in decomposition:
-                lines.append(f"- **{item.get('id', '')}:** {item.get('question', '')}")
-        steps = data.get("steps") or []
-        if steps:
-            lines.extend(["", "## Steps"])
-            for step in steps:
-                lines.append(f"{step.get('id', '')}. `{step.get('tool', '')}` ({step.get('subquestion_id', '')}) - {step.get('purpose', '')}")
-                lines.append(f"   ```powershell\n   {step.get('command', '')}\n   ```")
-        gap_check = data.get("gap_check") or {}
-        if gap_check:
-            lines.extend(["", "## Gap Check", gap_check.get("rule", "")])
-        return "\n".join(lines).strip() + "\n"
     if command == "route":
         return _format_route_markdown(data)
     if command == "route-calibrate":
         return _format_route_calibrate_markdown(data)
-    if command == "research":
-        lines = [
-            "# Research Report",
-            "",
-            f"**Question:** {data.get('question', '')}",
-            f"**Status:** {_status_label(data.get('ok'))}",
-            f"**Route policy:** {data.get('route_policy_version', '')}",
-            f"**Evidence dir:** `{data.get('evidence_dir', '')}`",
-            f"**Fallback used:** {bool(data.get('fallback_used'))}",
-            f"**Degraded:** {bool(data.get('degraded'))}",
-            "",
-            "## Answer",
-            data.get("final_answer") or data.get("content") or "",
-        ]
-        citations = data.get("citations") or []
-        if citations:
-            lines.extend(["", "## Citations"])
-            for item in citations:
-                url = item.get("url", "")
-                title = item.get("title") or url
-                provider = item.get("provider") or ""
-                lines.append(f"- [{title}]({url})" + (f" ({provider})" if provider else ""))
-        gaps = (data.get("gap_check") or {}).get("gaps") or []
-        if gaps:
-            lines.extend(["", "## Gaps"])
-            for gap in gaps:
-                reason = gap.get("reason", "")
-                url = gap.get("url", "")
-                lines.append(f"- {reason}" + (f" - {url}" if url else ""))
-        return "\n".join(lines).strip() + "\n"
     if command == "doctor":
         return _format_doctor_markdown(data)
     if command == "diagnose":
@@ -969,10 +903,6 @@ def _format_markdown(command: str, data: dict[str, Any]) -> str:
         "zhipu-mcp-search-doc": "Zhipu Coding Plan MCP Search Doc",
         "zhipu-mcp-repo-structure": "Zhipu Coding Plan MCP Repo Structure",
         "zhipu-mcp-read-file": "Zhipu Coding Plan MCP Read File",
-        "anysearch-domains": "AnySearch Domains",
-        "anysearch-search": "AnySearch Search",
-        "anysearch-extract": "AnySearch Extract",
-        "anysearch-batch": "AnySearch Batch",
         "context7-library": "Context7 Library Search",
     }
     if command in titles:
@@ -999,7 +929,7 @@ def _plain_result_lines(data: dict[str, Any]) -> list[str]:
 
 
 def _format_content(command: str, data: dict[str, Any]) -> str:
-    if command in {"search", "fetch", "context7-docs", "research"}:
+    if command in {"search", "docs", "fetch", "context7-docs"}:
         content = data.get("content")
         if content:
             return str(content) + "\n"
@@ -1046,12 +976,6 @@ def _format_content(command: str, data: dict[str, Any]) -> str:
         if data.get("error"):
             lines.append(f"Error: {_error_summary(data)}")
         return "\n".join(lines).strip() + "\n"
-    if command == "deep" or data.get("mode") == "deep_research":
-        lines = [
-            f"Deep Research plan for: {data.get('question', '')}",
-            "This command only plans; execute the listed CLI steps to perform live research.",
-        ]
-        return "\n".join(lines) + "\n"
     if command == "doctor":
         configured = data.get("capability_status", {})
         capability_bits = []
@@ -1141,10 +1065,6 @@ def _format_content(command: str, data: dict[str, Any]) -> str:
         "zhipu-mcp-search-doc",
         "zhipu-mcp-repo-structure",
         "zhipu-mcp-read-file",
-        "anysearch-domains",
-        "anysearch-search",
-        "anysearch-extract",
-        "anysearch-batch",
         "context7-library",
     }:
         lines = _plain_result_lines(data)
@@ -1276,7 +1196,6 @@ def _display_provider(provider: str, lang: str) -> str:
         "jina": "Jina Reader",
         "tavily": "Tavily",
         "firecrawl": "Firecrawl",
-        "anysearch": "AnySearch",
     }
     return names.get(provider, provider)
 
@@ -1484,11 +1403,6 @@ def _setup_status_from_values(values: dict[str, str]) -> dict[str, Any]:
             ],
             "fallback_chain": ["tavily", "jina", "zhipu-mcp-reader", "firecrawl"],
         },
-        "vertical_search": {
-            "configured": ["anysearch"] if has("ANYSEARCH_API_KEY") else [],
-            "fallback_chain": ["anysearch"],
-            "experimental": True,
-        },
     }
     for item in status.values():
         item["ok"] = bool(item["configured"])
@@ -1510,9 +1424,8 @@ def _write_setup_status(status: dict[str, Any], lang: str, *, final: bool = Fals
         "docs_search": _t(lang, "docs_search 文档搜索", "docs_search documentation search"),
         "web_fetch": _t(lang, "web_fetch 网页抓取", "web_fetch page fetch"),
         "web_search": _t(lang, "web_search 网页补强", "web_search web reinforcement"),
-        "vertical_search": _t(lang, "vertical_search 垂直搜索", "vertical_search vertical search"),
     }
-    for capability in ("main_search", "docs_search", "web_fetch", "web_search", "vertical_search"):
+    for capability in ("main_search", "docs_search", "web_fetch", "web_search"):
         item = status.get(capability, {})
         configured = item.get("configured") or []
         configured_text = ", ".join(_display_provider(provider, lang) for provider in configured)
@@ -2115,8 +2028,8 @@ def _prompt_intent_router(values: dict[str, str], current: dict[str, str], lang:
     _write_stderr(
         _t(
             lang,
-            "\n[可选增强] 智能意图路由\n用途: 先判断问题需要 docs_search、web_search、web_fetch 还是 vertical_search，再进入同能力 provider 兜底。\n说明: rules 永远可本地兜底；hybrid 可额外配置 embeddings 语义路由和 classifier 结构化分类。\n",
-            "\n[Optional] smart intent routing\nPurpose: decide whether a query needs docs_search, web_search, web_fetch, or vertical_search before same-capability provider fallback.\nNote: rules always remain the local fallback; hybrid can add semantic embeddings and structured classifier routing.\n",
+            "\n[可选增强] 智能意图路由\n用途: 诊断问题与 docs_search、web_search、web_fetch 的匹配关系。\n说明: Agent 查询命令已明确 operation，路由器只保留为诊断能力。\n",
+            "\n[Optional] smart intent routing\nPurpose: diagnose how a query maps to docs_search, web_search, or web_fetch.\nNote: Agent commands already declare their operation; the router is diagnostic only.\n",
         )
     )
     default_configure = _has_intent_router_config(merged)
@@ -2347,9 +2260,6 @@ def _run_advanced_setup_prompts(values: dict[str, str], current: dict[str, str],
         ("TAVILY_API_KEY", "Tavily API key", True),
         ("FIRECRAWL_API_URL", "Firecrawl API URL", True),
         ("FIRECRAWL_API_KEY", "Firecrawl API key", True),
-        ("ANYSEARCH_API_URL", "AnySearch MCP API URL", True),
-        ("ANYSEARCH_API_KEY", "AnySearch API key", True),
-        ("ANYSEARCH_TIMEOUT_SECONDS", "AnySearch timeout seconds", True),
     ]
     for key, label, optional in prompts:
         if values[key]:
@@ -2370,27 +2280,34 @@ def _run_advanced_setup_prompts(values: dict[str, str], current: dict[str, str],
 
 async def _run_async(args: argparse.Namespace) -> int:
     if args.command == "search":
-        search_kwargs = {
-            "platform": args.platform,
-            "model": args.model,
-            "extra_sources": args.extra_sources,
-            "validation": args.validation,
-            "fallback": args.fallback,
-            "providers": args.providers,
-        }
-        if args.stream is not None:
-            search_kwargs["stream"] = args.stream
-        if "timeout_seconds" in inspect.signature(service.search).parameters:
-            search_kwargs["timeout_seconds"] = args.timeout
-        try:
-            data = await asyncio.wait_for(
-                service.search(args.query, **search_kwargs),
-                timeout=args.timeout,
+        if args.operation == "answer":
+            data = await service.search_answer(args.query, stream=args.stream, timeout_seconds=args.timeout, debug=args.debug)
+        elif args.operation == "sources":
+            data = await service.search_sources(
+                args.query,
+                limit=args.limit,
+                mode=args.mode,
+                start_published_date=args.start_published_date,
+                include_domains=args.include_domains,
+                exclude_domains=args.exclude_domains,
+                category=args.category,
+                include_text=args.include_text,
+                include_highlights=args.include_highlights,
+                debug=args.debug,
             )
-        except asyncio.TimeoutError:
-            data = _search_timeout_result(args.query, args.timeout, search_kwargs)
-            return _print_result("search", data, args.format, args.output)
+        else:
+            data = await service.search_similar(args.url, limit=args.limit, debug=args.debug)
         return _print_result("search", data, args.format, args.output)
+    if args.command == "docs":
+        if args.operation == "resolve":
+            data = await service.docs_resolve(args.name, args.query, debug=args.debug)
+        elif args.operation == "search":
+            data = await service.docs_search(args.query, source=args.source, debug=args.debug)
+        elif args.operation == "tree":
+            data = await service.docs_tree(args.repo, path=args.path, ref=args.ref, debug=args.debug)
+        else:
+            data = await service.docs_read(args.repo, args.path, ref=args.ref, debug=args.debug)
+        return _print_result("docs", data, args.format, args.output)
     if args.command == "route":
         data = await service.route(args.query, validation=args.validation, mode=args.router_mode)
         return _print_result("route", data, args.format, args.output)
@@ -2398,16 +2315,21 @@ async def _run_async(args: argparse.Namespace) -> int:
         data = await service.route_calibrate(models=args.models)
         return _print_result("route-calibrate", data, args.format, args.output)
     if args.command == "fetch":
-        data = await service.fetch(args.url)
+        if args.operation == "content":
+            data = await service.fetch_content(args.url, debug=args.debug)
+        else:
+            schema = json.loads(args.schema) if args.schema else None
+            data = await service.fetch_extract(args.url, max_length=args.max_length, schema=schema, debug=args.debug)
         return _print_result("fetch", data, args.format, args.output)
     if args.command == "map":
-        data = await service.map_site(
+        data = await service.map_site_operation(
             args.url,
             instructions=args.instructions,
             max_depth=args.max_depth,
             max_breadth=args.max_breadth,
             limit=args.limit,
             timeout=args.timeout,
+            debug=args.debug,
         )
         return _print_result("map", data, args.format, args.output)
     if args.command == "exa-search":
@@ -2451,44 +2373,12 @@ async def _run_async(args: argparse.Namespace) -> int:
     if args.command == "zhipu-mcp-read-file":
         data = await service.zhipu_mcp_read_file(args.repo, args.path, ref=args.ref)
         return _print_result("zhipu-mcp-read-file", data, args.format, args.output)
-    if args.command == "anysearch-domains":
-        data = await service.anysearch_domains(args.domain)
-        return _print_result("anysearch-domains", data, args.format, args.output)
-    if args.command == "anysearch-search":
-        data = await service.anysearch_search(
-            args.query,
-            domain=args.domain,
-            sub_domain=args.sub_domain,
-            max_results=args.max_results,
-        )
-        return _print_result("anysearch-search", data, args.format, args.output)
-    if args.command == "anysearch-extract":
-        data = await service.anysearch_extract(args.url, max_length=args.max_length)
-        return _print_result("anysearch-extract", data, args.format, args.output)
-    if args.command == "anysearch-batch":
-        data = await service.anysearch_batch(args.queries, max_results=args.max_results)
-        return _print_result("anysearch-batch", data, args.format, args.output)
     if args.command == "context7-library":
         data = await service.context7_library(args.name, args.query)
         return _print_result("context7-library", data, args.format, args.output)
     if args.command == "context7-docs":
         data = await service.context7_docs(args.library_id, args.query)
         return _print_result("context7-docs", data, args.format, args.output)
-    if args.command == "deep":
-        data = service.build_deep_research_plan(
-            args.query,
-            budget=args.budget,
-            evidence_dir=args.evidence_dir,
-        )
-        return _print_result("deep", data, args.format, args.output)
-    if args.command == "research":
-        data = await service.research(
-            args.query,
-            budget=args.budget,
-            evidence_dir=args.evidence_dir,
-            fallback=args.fallback,
-        )
-        return _print_result("research", data, args.format, args.output)
     if args.command == "smoke":
         data = await service.smoke(args.mode)
         return _print_result("smoke", data, args.format, args.output)
@@ -2496,15 +2386,20 @@ async def _run_async(args: argparse.Namespace) -> int:
         data = await service.doctor()
         return _print_result("doctor", data, args.format, args.output)
     if args.command == "diagnose":
-        if args.diagnose_target == "openai-compatible":
+        if args.diagnose_command in {"search", "docs", "fetch", "map"}:
+            data = await service.diagnose_operation(args.diagnose_command, args.operation)
+            return _print_result("diagnose", data, args.format, args.output)
+        if args.diagnose_command == "provider":
             data = await service.diagnose_openai_compatible(timeout_seconds=args.timeout)
             return _print_result("diagnose", data, args.format, args.output)
-        return _print_result(
-            "diagnose",
-            {"ok": False, "error_type": "parameter_error", "error": f"Unknown diagnose target: {args.diagnose_target}"},
-            args.format,
-            args.output,
-        )
+        if args.diagnose_command == "route":
+            data = await service.route(args.query, validation=args.validation, mode=args.router_mode)
+            return _print_result("diagnose", data, args.format, args.output)
+        if args.diagnose_command == "route-calibrate":
+            data = await service.route_calibrate(models=args.models)
+            return _print_result("diagnose", data, args.format, args.output)
+        data = await service.smoke(args.mode)
+        return _print_result("diagnose", data, args.format, args.output)
     return EXIT_PARAMETER_ERROR
 
 
@@ -2614,9 +2509,6 @@ def _run_setup(args: argparse.Namespace) -> int:
         "TAVILY_API_KEY": args.tavily_key,
         "FIRECRAWL_API_URL": _normalize_firecrawl_api_url(args.firecrawl_api_url),
         "FIRECRAWL_API_KEY": args.firecrawl_key,
-        "ANYSEARCH_API_URL": _normalize_custom_base_url(args.anysearch_api_url),
-        "ANYSEARCH_API_KEY": args.anysearch_key,
-        "ANYSEARCH_TIMEOUT_SECONDS": args.anysearch_timeout,
     }
 
     lang = args.lang if args.lang in {"zh", "en"} else "zh"
@@ -2718,30 +2610,80 @@ async def _run_regression_smoke_fallback() -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = SmartSearchArgumentParser(
         prog="smart-search",
-        description="Smart Search CLI for AI-agent web research.",
+        description="Smart Search CLI for AI-agent web retrieval.",
     )
     parser.add_argument("-v", "--v", "--version", action="version", version=f"%(prog)s {_get_version()}")
-    sub = parser.add_subparsers(dest="command", required=True, parser_class=SmartSearchArgumentParser)
-
-    search_parser = sub.add_parser(
-        "search", aliases=COMMAND_ALIASES["search"], help="Run OpenAI-compatible web search."
+    sub = parser.add_subparsers(
+        dest="command",
+        required=True,
+        parser_class=SmartSearchArgumentParser,
+        metavar="{search,docs,fetch,map,doctor,diagnose,skills,setup,config,dev}",
     )
+
+    search_parser = sub.add_parser("search", aliases=COMMAND_ALIASES["search"], help="Answer questions, discover sources, or find similar pages.")
     search_parser.set_defaults(command="search")
-    search_parser.add_argument("query")
-    search_parser.add_argument("--platform", default="")
-    search_parser.add_argument("--model", default="")
-    search_parser.add_argument("--extra-sources", type=int, default=0)
-    search_parser.add_argument("--validation", choices=["fast", "balanced", "strict"], default="")
-    search_parser.add_argument("--fallback", choices=["auto", "off"], default="")
-    search_parser.add_argument("--providers", default="auto")
-    stream_group = search_parser.add_mutually_exclusive_group()
+    search_sub = search_parser.add_subparsers(dest="operation", required=True, parser_class=SmartSearchArgumentParser)
+    search_answer = search_sub.add_parser("answer", help="Generate a web-backed answer.")
+    search_answer.set_defaults(operation="answer")
+    search_answer.add_argument("query")
+    stream_group = search_answer.add_mutually_exclusive_group()
     stream_group.add_argument("--stream", dest="stream", action="store_true", default=None, help="Use stream=true for OpenAI-compatible main search.")
     stream_group.add_argument("--no-stream", dest="stream", action="store_false", help="Force stream=false for OpenAI-compatible main search.")
-    search_parser.add_argument("--timeout", type=float, default=90, metavar="SECONDS", help="Hard timeout in seconds.")
-    _add_format_args(search_parser)
+    search_answer.add_argument("--timeout", type=float, default=90, metavar="SECONDS")
+    search_answer.add_argument("--debug", action="store_true")
+    _add_format_args(search_answer)
+    search_sources = search_sub.add_parser("sources", help="Return source-first web results.")
+    search_sources.set_defaults(operation="sources")
+    search_sources.add_argument("query")
+    search_sources.add_argument("--limit", type=int, default=5)
+    search_sources.add_argument("--mode", choices=["semantic", "keyword", "auto"], default="auto")
+    search_sources.add_argument("--start-published-date", default="")
+    search_sources.add_argument("--include-domains", nargs="+", default=[])
+    search_sources.add_argument("--exclude-domains", nargs="+", default=[])
+    search_sources.add_argument("--category", default="")
+    search_sources.add_argument("--include-text", action="store_true")
+    search_sources.add_argument("--include-highlights", action="store_true")
+    search_sources.add_argument("--debug", action="store_true")
+    _add_format_args(search_sources)
+    search_similar = search_sub.add_parser("similar", help="Find pages similar to a URL.")
+    search_similar.set_defaults(operation="similar")
+    search_similar.add_argument("url")
+    search_similar.add_argument("--limit", type=int, default=5)
+    search_similar.add_argument("--debug", action="store_true")
+    _add_format_args(search_similar)
+
+    docs_parser = sub.add_parser("docs", help="Resolve, search, inspect, or read technical documentation and repositories.")
+    docs_parser.set_defaults(command="docs")
+    docs_sub = docs_parser.add_subparsers(dest="operation", required=True, parser_class=SmartSearchArgumentParser)
+    docs_resolve = docs_sub.add_parser("resolve")
+    docs_resolve.set_defaults(operation="resolve")
+    docs_resolve.add_argument("name")
+    docs_resolve.add_argument("query", nargs="?", default="")
+    docs_resolve.add_argument("--debug", action="store_true")
+    _add_format_args(docs_resolve)
+    docs_search = docs_sub.add_parser("search")
+    docs_search.set_defaults(operation="search")
+    docs_search.add_argument("query")
+    docs_search.add_argument("--source", default="")
+    docs_search.add_argument("--debug", action="store_true")
+    _add_format_args(docs_search)
+    docs_tree = docs_sub.add_parser("tree")
+    docs_tree.set_defaults(operation="tree")
+    docs_tree.add_argument("repo")
+    docs_tree.add_argument("--path", default="")
+    docs_tree.add_argument("--ref", default="")
+    docs_tree.add_argument("--debug", action="store_true")
+    _add_format_args(docs_tree)
+    docs_read = docs_sub.add_parser("read")
+    docs_read.set_defaults(operation="read")
+    docs_read.add_argument("repo")
+    docs_read.add_argument("path")
+    docs_read.add_argument("--ref", default="")
+    docs_read.add_argument("--debug", action="store_true")
+    _add_format_args(docs_read)
 
     route_parser = sub.add_parser(
-        "route", aliases=COMMAND_ALIASES["route"], help="Explain intent routing without running providers."
+        "route", aliases=COMMAND_ALIASES["route"], help=argparse.SUPPRESS
     )
     route_parser.set_defaults(command="route")
     route_parser.add_argument("query")
@@ -2757,7 +2699,7 @@ def build_parser() -> argparse.ArgumentParser:
     route_calibrate_parser = sub.add_parser(
         "route-calibrate",
         aliases=COMMAND_ALIASES["route-calibrate"],
-        help="Evaluate embedding intent-routing models and recommend threshold/margin.",
+        help=argparse.SUPPRESS,
     )
     route_calibrate_parser.set_defaults(command="route-calibrate")
     route_calibrate_parser.add_argument(
@@ -2767,23 +2709,38 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_format_args(route_calibrate_parser)
 
-    fetch_parser = sub.add_parser("fetch", aliases=COMMAND_ALIASES["fetch"], help="Fetch a URL as markdown.")
+    fetch_parser = sub.add_parser("fetch", aliases=COMMAND_ALIASES["fetch"], help="Read or structurally extract a known URL.")
     fetch_parser.set_defaults(command="fetch")
-    fetch_parser.add_argument("url")
-    _add_format_args(fetch_parser)
+    fetch_sub = fetch_parser.add_subparsers(dest="operation", required=True, parser_class=SmartSearchArgumentParser)
+    fetch_content = fetch_sub.add_parser("content", help="Return readable content or Markdown.")
+    fetch_content.set_defaults(operation="content")
+    fetch_content.add_argument("url")
+    fetch_content.add_argument("--debug", action="store_true")
+    _add_format_args(fetch_content)
+    fetch_extract = fetch_sub.add_parser("extract", help="Return structured data and raw evidence.")
+    fetch_extract.set_defaults(operation="extract")
+    fetch_extract.add_argument("url")
+    fetch_extract.add_argument("--max-length", type=int, default=20000)
+    fetch_extract.add_argument("--schema", default="", help="JSON schema object.")
+    fetch_extract.add_argument("--debug", action="store_true")
+    _add_format_args(fetch_extract)
 
-    map_parser = sub.add_parser("map", aliases=COMMAND_ALIASES["map"], help="Map a website structure.")
+    map_parser = sub.add_parser("map", aliases=COMMAND_ALIASES["map"], help="Explore website URL and link structure.")
     map_parser.set_defaults(command="map")
-    map_parser.add_argument("url")
-    map_parser.add_argument("--instructions", default="")
-    map_parser.add_argument("--max-depth", type=int, default=1)
-    map_parser.add_argument("--max-breadth", type=int, default=20)
-    map_parser.add_argument("--limit", type=int, default=50)
-    map_parser.add_argument("--timeout", type=int, default=150)
-    _add_format_args(map_parser)
+    map_sub = map_parser.add_subparsers(dest="operation", required=True, parser_class=SmartSearchArgumentParser)
+    map_site = map_sub.add_parser("site")
+    map_site.set_defaults(operation="site")
+    map_site.add_argument("url")
+    map_site.add_argument("--instructions", default="")
+    map_site.add_argument("--max-depth", type=int, default=1)
+    map_site.add_argument("--max-breadth", type=int, default=20)
+    map_site.add_argument("--limit", type=int, default=50)
+    map_site.add_argument("--timeout", type=int, default=150)
+    map_site.add_argument("--debug", action="store_true")
+    _add_format_args(map_site)
 
     exa_parser = sub.add_parser(
-        "exa-search", aliases=COMMAND_ALIASES["exa-search"], help="Run Exa source-first search."
+        "exa-search", aliases=COMMAND_ALIASES["exa-search"], help=argparse.SUPPRESS
     )
     exa_parser.set_defaults(command="exa-search")
     exa_parser.add_argument("query")
@@ -2798,7 +2755,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_format_args(exa_parser)
 
     similar_parser = sub.add_parser(
-        "exa-similar", aliases=COMMAND_ALIASES["exa-similar"], help="Find pages similar to a URL with Exa."
+        "exa-similar", aliases=COMMAND_ALIASES["exa-similar"], help=argparse.SUPPRESS
     )
     similar_parser.set_defaults(command="exa-similar")
     similar_parser.add_argument("url")
@@ -2806,7 +2763,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_format_args(similar_parser)
 
     zhipu_parser = sub.add_parser(
-        "zhipu-search", aliases=COMMAND_ALIASES["zhipu-search"], help="Run Zhipu Web Search source-first search."
+        "zhipu-search", aliases=COMMAND_ALIASES["zhipu-search"], help=argparse.SUPPRESS
     )
     zhipu_parser.set_defaults(command="zhipu-search")
     zhipu_parser.add_argument("query")
@@ -2820,7 +2777,7 @@ def build_parser() -> argparse.ArgumentParser:
     zhipu_mcp_search_parser = sub.add_parser(
         "zhipu-mcp-search",
         aliases=COMMAND_ALIASES["zhipu-mcp-search"],
-        help="Run Zhipu Coding Plan Remote MCP web_search_prime.",
+        help=argparse.SUPPRESS,
     )
     zhipu_mcp_search_parser.set_defaults(command="zhipu-mcp-search")
     zhipu_mcp_search_parser.add_argument("query")
@@ -2830,7 +2787,7 @@ def build_parser() -> argparse.ArgumentParser:
     zhipu_mcp_reader_parser = sub.add_parser(
         "zhipu-mcp-reader",
         aliases=COMMAND_ALIASES["zhipu-mcp-reader"],
-        help="Run Zhipu Coding Plan Remote MCP webReader.",
+        help=argparse.SUPPRESS,
     )
     zhipu_mcp_reader_parser.set_defaults(command="zhipu-mcp-reader")
     zhipu_mcp_reader_parser.add_argument("url")
@@ -2839,7 +2796,7 @@ def build_parser() -> argparse.ArgumentParser:
     zhipu_mcp_search_doc_parser = sub.add_parser(
         "zhipu-mcp-search-doc",
         aliases=COMMAND_ALIASES["zhipu-mcp-search-doc"],
-        help="Search repository docs through Zhipu Coding Plan zread MCP.",
+        help=argparse.SUPPRESS,
     )
     zhipu_mcp_search_doc_parser.set_defaults(command="zhipu-mcp-search-doc")
     zhipu_mcp_search_doc_parser.add_argument("repo")
@@ -2850,7 +2807,7 @@ def build_parser() -> argparse.ArgumentParser:
     zhipu_mcp_repo_structure_parser = sub.add_parser(
         "zhipu-mcp-repo-structure",
         aliases=COMMAND_ALIASES["zhipu-mcp-repo-structure"],
-        help="Read repository structure through Zhipu Coding Plan zread MCP.",
+        help=argparse.SUPPRESS,
     )
     zhipu_mcp_repo_structure_parser.set_defaults(command="zhipu-mcp-repo-structure")
     zhipu_mcp_repo_structure_parser.add_argument("repo")
@@ -2860,7 +2817,7 @@ def build_parser() -> argparse.ArgumentParser:
     zhipu_mcp_read_file_parser = sub.add_parser(
         "zhipu-mcp-read-file",
         aliases=COMMAND_ALIASES["zhipu-mcp-read-file"],
-        help="Read a repository file through Zhipu Coding Plan zread MCP.",
+        help=argparse.SUPPRESS,
     )
     zhipu_mcp_read_file_parser.set_defaults(command="zhipu-mcp-read-file")
     zhipu_mcp_read_file_parser.add_argument("repo")
@@ -2868,51 +2825,11 @@ def build_parser() -> argparse.ArgumentParser:
     zhipu_mcp_read_file_parser.add_argument("--ref", default="")
     _add_format_args(zhipu_mcp_read_file_parser)
 
-    anysearch_domains_parser = sub.add_parser(
-        "anysearch-domains",
-        aliases=COMMAND_ALIASES["anysearch-domains"],
-        help="List AnySearch vertical search domains.",
-    )
-    anysearch_domains_parser.set_defaults(command="anysearch-domains")
-    anysearch_domains_parser.add_argument("domain", nargs="?", default="")
-    _add_format_args(anysearch_domains_parser)
-
-    anysearch_search_parser = sub.add_parser(
-        "anysearch-search",
-        aliases=COMMAND_ALIASES["anysearch-search"],
-        help="Run experimental AnySearch vertical/general search.",
-    )
-    anysearch_search_parser.set_defaults(command="anysearch-search")
-    anysearch_search_parser.add_argument("query")
-    anysearch_search_parser.add_argument("--domain", default="")
-    anysearch_search_parser.add_argument("--sub-domain", default="")
-    anysearch_search_parser.add_argument("--max-results", type=int, default=5)
-    _add_format_args(anysearch_search_parser)
-
-    anysearch_extract_parser = sub.add_parser(
-        "anysearch-extract",
-        aliases=COMMAND_ALIASES["anysearch-extract"],
-        help="Extract a URL through AnySearch experimental extract.",
-    )
-    anysearch_extract_parser.set_defaults(command="anysearch-extract")
-    anysearch_extract_parser.add_argument("url")
-    anysearch_extract_parser.add_argument("--max-length", type=int, default=20000)
-    _add_format_args(anysearch_extract_parser)
-
-    anysearch_batch_parser = sub.add_parser(
-        "anysearch-batch",
-        aliases=COMMAND_ALIASES["anysearch-batch"],
-        help="Run up to 5 AnySearch queries in parallel.",
-    )
-    anysearch_batch_parser.set_defaults(command="anysearch-batch")
-    anysearch_batch_parser.add_argument("queries", nargs="+")
-    anysearch_batch_parser.add_argument("--max-results", type=int, default=3)
-    _add_format_args(anysearch_batch_parser)
 
     context7_library_parser = sub.add_parser(
         "context7-library",
         aliases=COMMAND_ALIASES["context7-library"],
-        help="Resolve Context7 library candidates.",
+        help=argparse.SUPPRESS,
     )
     context7_library_parser.set_defaults(command="context7-library")
     context7_library_parser.add_argument("name")
@@ -2922,38 +2839,16 @@ def build_parser() -> argparse.ArgumentParser:
     context7_docs_parser = sub.add_parser(
         "context7-docs",
         aliases=COMMAND_ALIASES["context7-docs"],
-        help="Fetch Context7 docs for a library.",
+        help=argparse.SUPPRESS,
     )
     context7_docs_parser.set_defaults(command="context7-docs")
     context7_docs_parser.add_argument("library_id")
     context7_docs_parser.add_argument("query")
     _add_format_args(context7_docs_parser)
 
-    deep_parser = sub.add_parser(
-        "deep",
-        aliases=COMMAND_ALIASES["deep"],
-        help="Create an offline Deep Research plan without calling providers.",
-    )
-    deep_parser.set_defaults(command="deep")
-    deep_parser.add_argument("query")
-    deep_parser.add_argument("--budget", choices=["quick", "standard", "deep"], default="standard")
-    deep_parser.add_argument("--evidence-dir", default="")
-    _add_format_args(deep_parser)
-
-    research_parser = sub.add_parser(
-        "research",
-        aliases=COMMAND_ALIASES["research"],
-        help="Run live Deep Research with provider-advantage routing and evidence-only synthesis.",
-    )
-    research_parser.set_defaults(command="research")
-    research_parser.add_argument("query")
-    research_parser.add_argument("--budget", choices=["quick", "standard", "deep"], default="deep")
-    research_parser.add_argument("--evidence-dir", default="")
-    research_parser.add_argument("--fallback", choices=["auto", "off"], default="auto")
-    _add_format_args(research_parser)
 
     smoke_parser = sub.add_parser(
-        "smoke", aliases=COMMAND_ALIASES["smoke"], help="Run provider routing and fallback smoke checks."
+        "smoke", aliases=COMMAND_ALIASES["smoke"], help=argparse.SUPPRESS
     )
     smoke_parser.set_defaults(command="smoke")
     smoke_mode = smoke_parser.add_mutually_exclusive_group()
@@ -2972,18 +2867,45 @@ def build_parser() -> argparse.ArgumentParser:
     diagnose_parser = sub.add_parser(
         "diagnose",
         aliases=COMMAND_ALIASES["diagnose"],
-        help="Run focused troubleshooting checks for a provider.",
+        help="Troubleshoot operations, providers, routing, and smoke checks.",
     )
     diagnose_parser.set_defaults(command="diagnose")
-    diagnose_parser.add_argument("diagnose_target", choices=["openai-compatible"])
-    diagnose_parser.add_argument("--timeout", type=float, default=30, metavar="SECONDS", help="Per search-shape probe timeout in seconds.")
-    diagnose_parser.add_argument("--format", choices=["json", "markdown"], default="markdown")
-    diagnose_parser.add_argument("--output", default="", help="Write rendered output to a file.")
+    diagnose_sub = diagnose_parser.add_subparsers(dest="diagnose_command", required=True, parser_class=SmartSearchArgumentParser)
+    for capability, operations in {
+        "search": ["answer", "sources", "similar"],
+        "docs": ["resolve", "search", "tree", "read"],
+        "fetch": ["content", "extract"],
+        "map": ["site"],
+    }.items():
+        item = diagnose_sub.add_parser(capability)
+        item.set_defaults(diagnose_command=capability)
+        item.add_argument("operation", nargs="?", choices=operations, default="")
+        _add_format_args(item)
+    diagnose_provider = diagnose_sub.add_parser("provider")
+    diagnose_provider.set_defaults(diagnose_command="provider")
+    diagnose_provider.add_argument("provider", choices=["openai-compatible"])
+    diagnose_provider.add_argument("--timeout", type=float, default=30)
+    diagnose_provider.add_argument("--format", choices=["json", "markdown"], default="markdown")
+    diagnose_provider.add_argument("--output", default="")
+    diagnose_route = diagnose_sub.add_parser("route")
+    diagnose_route.set_defaults(diagnose_command="route")
+    diagnose_route.add_argument("query")
+    diagnose_route.add_argument("--validation", choices=["fast", "balanced", "strict"], default="")
+    diagnose_route.add_argument("--router-mode", choices=["hybrid", "rules", "off"], default="")
+    _add_format_args(diagnose_route)
+    diagnose_calibrate = diagnose_sub.add_parser("route-calibrate")
+    diagnose_calibrate.set_defaults(diagnose_command="route-calibrate")
+    diagnose_calibrate.add_argument("--models", default="")
+    _add_format_args(diagnose_calibrate)
+    diagnose_smoke = diagnose_sub.add_parser("smoke")
+    diagnose_smoke.set_defaults(diagnose_command="smoke")
+    diagnose_smoke.add_argument("--mode", choices=["mock", "live"], default="mock")
+    _add_format_args(diagnose_smoke)
 
     model_parser = sub.add_parser(
         "model",
         aliases=COMMAND_ALIASES["model"],
-        help="Inspect explicit provider models; use config set XAI_MODEL or OPENAI_COMPATIBLE_MODEL to change them.",
+        help=argparse.SUPPRESS,
     )
     model_parser.set_defaults(command="model")
     model_sub = model_parser.add_subparsers(dest="model_command", required=True, parser_class=SmartSearchArgumentParser)
@@ -3089,9 +3011,6 @@ def build_parser() -> argparse.ArgumentParser:
     setup_parser.add_argument("--tavily-key", default="", help="Save TAVILY_API_KEY.")
     setup_parser.add_argument("--firecrawl-api-url", default="", help="Save FIRECRAWL_API_URL.")
     setup_parser.add_argument("--firecrawl-key", default="", help="Save FIRECRAWL_API_KEY.")
-    setup_parser.add_argument("--anysearch-api-url", default="", help="Save ANYSEARCH_API_URL.")
-    setup_parser.add_argument("--anysearch-key", default="", help="Save ANYSEARCH_API_KEY.")
-    setup_parser.add_argument("--anysearch-timeout", default="", help="Save ANYSEARCH_TIMEOUT_SECONDS.")
     _add_format_args(setup_parser)
 
     config_parser = sub.add_parser(
@@ -3115,18 +3034,37 @@ def build_parser() -> argparse.ArgumentParser:
     config_unset.add_argument("key")
     _add_format_args(config_unset)
 
+    dev_parser = sub.add_parser("dev", help="Developer-only commands.")
+    dev_parser.set_defaults(command="dev")
+    dev_sub = dev_parser.add_subparsers(dest="dev_command", required=True, parser_class=SmartSearchArgumentParser)
+    dev_regression = dev_sub.add_parser("regression")
+    dev_regression.set_defaults(dev_command="regression")
+
     regression_parser = sub.add_parser(
-        "regression", aliases=COMMAND_ALIASES["regression"], help="Run offline CLI regression tests."
+        "regression", aliases=COMMAND_ALIASES["regression"], help=argparse.SUPPRESS
     )
     regression_parser.set_defaults(command="regression")
     return parser
 
 
+def _normalize_legacy_argv(argv: list[str]) -> list[str]:
+    if len(argv) >= 2 and argv[0] == "search" and argv[1] not in {"answer", "sources", "similar", "-h", "--help"}:
+        return ["search", "answer", *argv[1:]]
+    if len(argv) >= 2 and argv[0] == "fetch" and argv[1] not in {"content", "extract", "-h", "--help"}:
+        return ["fetch", "content", *argv[1:]]
+    if len(argv) >= 2 and argv[0] == "map" and argv[1] not in {"site", "-h", "--help"}:
+        return ["map", "site", *argv[1:]]
+    if len(argv) >= 2 and argv[0] == "diagnose" and argv[1] == "openai-compatible":
+        return ["diagnose", "provider", *argv[1:]]
+    return argv
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
+    argv = _normalize_legacy_argv(list(sys.argv[1:] if argv is None else argv))
     args = parser.parse_args(argv)
     try:
-        if args.command == "regression":
+        if args.command == "regression" or (args.command == "dev" and args.dev_command == "regression"):
             return _run_regression()
         if args.command == "setup":
             return _run_setup(args)
