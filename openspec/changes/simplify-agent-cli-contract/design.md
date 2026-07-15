@@ -1,103 +1,165 @@
 ## Context
 
-当前 `smart-search` CLI 同时暴露按任务命名的命令、按 provider 命名的命令、意图路由诊断、Deep Research 编排、配置管理和开发回归入口。底层多 provider 有利于覆盖率与容错，但公开命令面迫使 Agent 理解供应商差异，且与上层 Agent 自身的任务规划形成重复编排。
+当前 `smart-search` 同时暴露任务命令、provider 命令、路由诊断、Deep Research、配置管理和开发回归入口。底层多 provider 有助于覆盖率和容错，但公开命令缺乏稳定的任务抽象；另一方面，若只保留四个无子命令的粗粒度入口，又会丢失相似页面、library resolve、仓库树、文件读取和结构化抽取等有效操作。
 
-本变更涉及 CLI 参数、service 路由、配置结构、统一输出、测试、README 和两份同步发布的 Agent skill。现有 JSON/Markdown/content 输出属于用户可见契约，迁移必须显式处理兼容性；provider 凭据、个人配置和本地绝对路径不得进入仓库。
+本变更采用“四大能力 + operation”的中间层：Agent 选择真实任务操作，配置选择 provider。现有 JSON/Markdown/content 输出属于用户可见契约；provider 凭据、完整配置、内部异常和个人路径不得泄漏。
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- 将 Agent-facing 搜索接口稳定为 `search`、`docs search|tree|read`、`fetch`、`map`。
-- 让配置文件决定 provider 可用性、顺序、超时与 fallback。
-- 为不同 provider 建立统一能力适配和结果模型。
-- 保留面向人类维护者的帮助、版本、配置、健康检查和专项诊断。
-- 提供可测试、可回滚的旧 CLI 迁移路径，并同步 Agent skill 与 README。
+- 用四大能力命名空间无损承载除 AnySearch 和 Deep Research 外的现有有效能力。
+- 让 Agent 表达 `answer`、`sources`、`similar`、`resolve`、`tree`、`read`、`content`、`extract`、`site` 等任务操作，而不表达 provider。
+- 按 `capability.operation` 配置 provider、feature、顺序、超时与 fallback。
+- 把路由、provider 专项、smoke 和 regression 收入清晰的维护/开发命令树。
+- 保持统一、简洁的 Agent 输出，并提供脱敏 debug/diagnose 溯源。
 
 **Non-Goals:**
 
-- 除本期明确移除 AnySearch 外，不替换其他底层 provider，也不改变第三方 API 的认证方式。
-- 不在 CLI 内重新实现一个 Deep Research Agent；任务分解、并行研究和最终写作由上层 Agent 负责。
-- 不在本期引入 paper-search 或新的垂直搜索实现；该能力后续通过独立 change 扩展。
-- 不要求首个实现周期新增 `map` provider；当前仍可只有 Tavily。
-- 不把 provider 调试细节重新包装成新的 Agent 参数。
+- 不保留 AnySearch、通用垂直搜索、domains 或 batch search；论文与垂直能力后续由 paper-search change 扩展。
+- 不保留 `deep`、`research` 或在 CLI 内构建第二个研究 Agent。
+- 不改变第三方 API 的认证机制，也不要求为每个 operation 都有多个 provider。
+- 不把 provider 名称重新包装成普通查询参数。
 
 ## Decisions
 
-### 1. 公开接口按能力命名
+### 1. 四大能力使用稳定子命令
 
-默认帮助和 Agent skill 只把四类搜索能力作为工具入口。`docs` 是能力命名空间，通过 `search`、`tree`、`read` 三个 provider 无关的操作分别表达文档/仓库知识搜索、仓库目录读取和仓库文件读取；`fetch` 统一多种 Reader/Scrape 实现；`map` 保留站点级链接发现用途。
+公开查询结构为：
 
-`map` 专指从网站入口发现站内页面 URL、路径和链接结构，不等同于单页结构化数据提取，也不等同于 GitHub 仓库目录树。单页内容或字段提取属于 `fetch`，仓库目录树属于 `docs tree`。
+```text
+search
+├─ answer QUERY
+├─ sources QUERY
+└─ similar URL
 
-选择能力命令而不是 provider 命令，是因为能力名称表达 Agent 的真实意图，并允许后续替换 provider 而不修改 prompt 或 skill。备选方案是保留所有 provider 命令、只精简文档，但隐藏不彻底，Agent 仍可能从 help 或错误提示中学习并选择底层入口。
+docs
+├─ resolve NAME [QUERY]
+├─ search QUERY [--source SOURCE]
+├─ tree REPO [--path PATH] [--ref REF]
+└─ read REPO PATH [--ref REF]
 
-### 2. 使用配置化能力链
+fetch
+├─ content URL
+└─ extract URL
 
-配置层增加四类公开能力对应的 provider 顺序和策略。对于包含多种操作的能力，配置和 provider profile 必须细化到 `capability.operation`；未配置、禁用或不支持目标操作的 provider 不进入候选链。
+map
+└─ site URL
+```
 
-推荐的逻辑映射为：
+operation 是 Agent 必须表达的任务语义，不是 provider 细节。`map site` 专指站内 URL、路径和链接结构发现；`docs tree` 专指代码仓库目录；`fetch extract` 专指结构化字段或原始 evidence 提取，三者不得混用。
 
-| 公开能力/操作 | 内部 provider 候选 |
+### 2. 现有能力按 operation 无损映射
+
+| Operation | 内部 provider/tool 候选 |
 |---|---|
-| `search` | 回答：xAI Responses、OpenAI-compatible；网页发现：Zhipu、Zhipu MCP、Tavily、Firecrawl |
-| `docs search` | Context7、Exa、Zhipu MCP zread `search_doc` |
-| `docs tree` | Zhipu MCP zread `get_repo_structure` |
-| `docs read` | Zhipu MCP zread `read_file` |
-| `fetch` | Jina、Tavily、Zhipu MCP Reader、Firecrawl |
-| `map` | Tavily |
+| `search.answer` | xAI Responses、OpenAI-compatible |
+| `search.sources` | Exa Search、Zhipu Web Search、Zhipu MCP `web_search_prime`、Tavily Search、Firecrawl Search |
+| `search.similar` | Exa Similar |
+| `docs.resolve` | Context7 library |
+| `docs.search` | Context7 docs、Exa Search、Zhipu MCP zread `search_doc` |
+| `docs.tree` | Zhipu MCP zread `get_repo_structure` |
+| `docs.read` | Zhipu MCP zread `read_file` |
+| `fetch.content` | Tavily Extract、Jina Reader、Zhipu MCP `webReader`、Firecrawl Scrape |
+| `fetch.extract` | Firecrawl 结构化抽取及未来声明同 operation 的 provider |
+| `map.site` | Tavily Map |
 
-配置使用已有环境变量/本地配置机制扩展，避免引入新的运行时配置依赖。配置可表达优先顺序、禁用项、单能力超时和 fallback 开关，但 Agent skill 不展示这些键。
+AnySearch 不出现在映射中。删除 AnySearch 后，`fetch.extract` 仍保留为稳定任务契约，但只有真正实现结构化输出的 provider 才能进入；首期应扩展 Firecrawl 适配器承接该 operation，若未配置则明确返回 `config_error`，不得退化为普通 Markdown。
 
-备选方案是继续通过 `--providers` 临时选择，优点是调试灵活，缺点是把运维策略交给 Agent，因此只允许诊断层读取或覆盖，不属于普通命令契约。
+### 3. 来源搜索参数使用 feature negotiation
 
-### 3. 简化搜索路径，避免二次 Agent 编排
+`search sources` 保留跨 provider 的任务级参数：
 
-命令和子命令已经声明能力与操作，因此 `docs`、`fetch`、`map` 不再运行 embedding 或 LLM classifier 来重新判断类型。`docs search` 可根据 `--source` 的中立来源标识判断是库/API 文档还是 `owner/repo` 仓库知识；`docs tree` 与 `docs read` 只选择实现同操作的 provider。`search` 可以在内部依据轻量规则决定是否补充实时网页来源，但不得把 router、validation 层级或 provider 选择暴露给 Agent。
+- `--limit`
+- `--mode semantic|keyword|auto`
+- 发布时间/时间范围
+- include/exclude domains
+- `--category`
+- `--include-text`
+- `--include-highlights`
 
-原有 `deep` 和 `research` 的规划、证据循环、证据目录与综合实现从本期代码中移除；上层 Agent 使用四类原子能力自行编排。AnySearch provider、配置、命令和 `vertical_search` 路由同时移除，未来论文与垂直搜索由独立的 paper-search 扩展承担。`route`、`route-calibrate` 仅在内部测试或迁移期保留，不出现在默认命令面。
+provider profile 除 operations 外还声明 features。executor 先根据 operation 筛选，再根据调用要求筛选 feature；不支持必需参数的 provider 不进入候选链。若没有候选，返回明确的 `capability_error`，不得静默忽略过滤条件。非必需、仅用于改善排序的 hint 可以在统一结果中标记为未应用。
 
-### 4. 统一公共结果与诊断元数据
+### 4. 配置与 fallback 精确到 operation
 
-四类命令共享核心 envelope：`ok`、`capability`、`operation`、`content`、`sources`、`elapsed_ms`，失败时增加 `error_type` 和 `error`。`docs tree` 可在 `entries` 中返回路径、类型和层级，`docs read` 在 `content` 中返回文件正文；`sources` 统一为 `title`、`url`、`snippet`，其他命令特有信息放在稳定的可选字段中。
+配置逻辑结构示例：
 
-`provider_attempts`、内部 provider 名称、模型 fallback、breaker、路由评分和异常细节移动到 debug metadata。普通 JSON 默认不输出；`--debug`、`doctor`、`diagnose` 和日志可读取脱敏版本。
+```yaml
+providers:
+  context7:
+    operations: [docs.resolve, docs.search]
+  zhipu-mcp-zread:
+    operations: [docs.search, docs.tree, docs.read]
+  exa:
+    operations: [search.sources, search.similar, docs.search]
+  firecrawl:
+    operations: [search.sources, fetch.content, fetch.extract]
+```
 
-备选方案是继续把所有字段放入 JSON 并让 Agent 忽略，但这会持续占用上下文，也会使内部实现被误认为稳定契约。
+每个 operation 独立配置优先顺序、禁用项、超时和 fallback。fallback 只能在相同 operation 内发生，例如 `docs.tree` 不得 fallback 到 Context7，`fetch.extract` 不得用 `fetch.content` 的 Markdown 冒充结构化结果。
 
-### 5. 诊断按能力组织
+### 5. 统一公共输出
 
-`doctor` 报告四种能力是否可用以及配置/连接概况；`diagnose search|docs|fetch|map` 深入测试该能力下的候选 provider。诊断结果可显示 provider，因为目标用户是维护者，但这些命令在帮助中与 Agent 搜索命令分组，Agent skill 不将其作为正常路由手段。
+公共 envelope 包含：`ok`、`capability`、`operation`、`content`、`sources`、`elapsed_ms`；失败增加 `error_type` 和 `error`。operation 特有数据使用稳定字段：
 
-### 6. 分阶段迁移旧命令
+- `search.sources` / `search.similar`：`results`
+- `docs.resolve`：`candidates`
+- `docs.tree`：`entries`
+- `docs.read` / `fetch.content`：`content`
+- `fetch.extract`：`data` 与可选 `raw_evidence`
+- `map.site`：`entries` 或 `results`
 
-首个兼容发布中，仍有明确替代操作的旧 provider 命令从 help 和 Agent skill 隐藏，调用时输出弃用信息并尽量转发到新能力；无法无损转发的高级参数返回明确迁移说明。AnySearch、`deep`、`research` 不进入兼容转发层，直接从 parser、service、配置、测试和文档中删除。`model` 等其他旧入口返回面向新职责边界的迁移指引。下一个破坏性发布删除剩余兼容解析器和旧测试契约。
+普通输出省略 provider attempts、模型 fallback、breaker、路由评分和堆栈；`--debug`、`doctor`、`diagnose` 和日志可提供脱敏元数据。
 
-这种方式比立即删除降低现有脚本断裂风险，同时保证新 Agent 不再看到旧接口。
+### 6. 完整维护与诊断树
+
+```text
+diagnose
+├─ search [answer|sources|similar]
+├─ docs [resolve|search|tree|read]
+├─ fetch [content|extract]
+├─ map [site]
+├─ provider openai-compatible
+├─ route QUERY
+├─ route-calibrate [--models MODELS]
+└─ smoke [--mode mock|live]
+
+dev
+└─ regression
+```
+
+未指定 operation 时，capability diagnose 依次检查该命名空间全部 operation。原有 `diagnose openai-compatible`、`route`、`route-calibrate`、`smoke` 和 `regression` 分别迁入上述位置。`setup`、`doctor`、`config path|list|set|unset`、`skills status|update`、`-h/--help`、`-v/--version` 保持独立功能入口。
+
+### 7. 删除 AnySearch 与 Deep Research
+
+AnySearch provider、四个 AnySearch 命令、配置项、`vertical_search` 路由及测试契约直接删除，不做兼容转发。`deep`、`research`、计划构建、live executor、evidence artifact 和 research provider override 同样直接删除。相似页面、结构化抽取等非 AnySearch 专属任务能力通过新的 operation 继续保留。
+
+### 8. 旧命令分阶段迁移
+
+有同等 operation 的旧命令在一个发布周期内隐藏兼容，例如 `exa-search` → `search sources`、`exa-similar` → `search similar`、`context7-library` → `docs resolve`、zread 命令 → 对应 docs operation、`fetch` → `fetch content`、`map` → `map site`。AnySearch、`deep`、`research` 不进入兼容层。
 
 ## Risks / Trade-offs
 
-- [统一命令可能失去 provider 特有高级参数] → 只保留跨 provider、任务级的通用参数；特有能力通过配置或维护者诊断入口处理。
-- [`docs` 子操作当前 provider 覆盖不均衡] → fallback 严格限定为同操作；`tree`/`read` 只有一个 provider 时明确报告单点能力状态，不用 `search` 结果冒充。
-- [自动 fallback 可能掩盖坏配置并增加延迟] → 记录脱敏尝试信息，按错误类型决定是否继续，并为能力设置总超时预算。
-- [一个发布周期同时维护新旧入口增加实现复杂度] → 兼容层只做薄转发和弃用提示，不复制 provider 逻辑，并预先写明删除版本。
-- [移除 Deep Research CLI 可能影响人类用户] → 在迁移说明中提供由 `search/docs/fetch/map` 组合完成研究的示例；如未来需要人类研究产品，应作为独立界面重新设计。
-- [移除 AnySearch 会暂时降低垂直领域覆盖] → 明确本期不提供替代 fallback，避免保留弱能力；后续通过独立 paper-search change 恢复论文等垂直搜索。
-- [`search` 同时涉及答案生成与来源发现] → 内部拆分 answer 与 discovery 子能力，但保持一个公开命令和统一总超时。
-- [默认隐藏 provider 信息降低问题定位效率] → `--debug`、`doctor`、`diagnose` 和日志继续提供完整脱敏溯源。
+- [子命令增多仍可能增加选择成本] → 子命令全部对应互斥、可解释的任务动作；Agent skill 提供简短决策表，不展示 provider。
+- [feature negotiation 可能导致候选为空] → 返回明确缺失 feature 和配置建议，不静默降低查询约束。
+- [`fetch.extract` 删除 AnySearch 后需要新适配] → 以 Firecrawl 结构化能力承接；未实现或未配置时明确不可用，不伪装成功。
+- [部分 operation 只有一个 provider] → doctor/diagnose 标记单点能力，同操作链耗尽时直接失败。
+- [迁移层增加短期维护成本] → 只做薄转发与弃用提示，一个发布周期后删除。
+- [移除 Deep Research 影响现有人类用户] → README 给出由四大能力组合研究的迁移示例，未来如需研究产品另行设计。
 
 ## Migration Plan
 
-1. 先补充新版 CLI、`docs` 子操作、AnySearch/Research 删除行为和统一输出的失败测试。
-2. 删除 AnySearch provider、配置、命令、垂直路由及 Deep Research 规划/执行路径。
-3. 增加细化到 `capability.operation` 的配置链，实现 `docs search|tree|read`，并将 `search`、`fetch`、`map` 接入统一 executor。
-4. 增加能力/操作级 `doctor`、`diagnose` 和 debug metadata，验证同操作 fallback。
-5. 更新默认 help、README 和两份 Agent skill，只公开四类搜索能力。
-6. 将其他旧 provider 命令改为隐藏兼容入口并增加弃用测试；在后续破坏性版本删除剩余兼容入口。
+1. 先添加完整命令树、operation mapping、feature negotiation、AnySearch/Research 删除行为的失败测试。
+2. 删除 AnySearch 与 Deep Research 代码、配置、测试和资源引用。
+3. 建立 operation executor 与统一输出，逐一迁移 search/docs/fetch/map 子命令。
+4. 扩展 Firecrawl 适配器支持 `fetch.extract` 的结构化输出。
+5. 重组 diagnose/dev/配置/帮助命令，加入 operation 级健康检查。
+6. 添加旧命令薄兼容层并同步 README 与两份 skill。
+7. 完成全量 Python/npm/发布资源验证后按阶段提交。
 
-回滚时可恢复旧 parser 的默认可见性和直接 service 调用；能力 executor 与 provider adapter 可继续复用，不需要回滚 provider 实现或用户凭据。
+回滚时可恢复旧 parser 可见性和直接 service 调用；operation executor 与 provider adapter 可继续复用。AnySearch 与 Deep Research 的删除应通过 revert 对应独立阶段 commit 回滚，不与其他 CLI 重构混合。
 
 ## Open Questions
 
-- 兼容入口的具体删除版本需在实施时结合当前包版本和发布节奏写入 README；规格要求至少保留一个发布周期，不要求固定版本号。
-- `docs search --source` 首版是否同时支持 library ID、`owner/repo` 和普通 URL，需要在实现调查中基于现有 Context7/zread 参数归一化规则确定，但不得暴露 provider 名称。
+- Firecrawl `fetch.extract` 首版的结构化 schema 参数形式需要在实现阶段依据当前官方 API 与仓库版本确定，但公共命令和 `data/raw_evidence` 输出契约保持 provider 无关。
+- `search sources` 的时间过滤统一命名需要在实现前对照 Exa、Zhipu、Tavily 和 Firecrawl 当前参数，选择不会暗示某一 provider 的公共字段。
