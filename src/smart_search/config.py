@@ -509,14 +509,6 @@ class Config:
         return {str(key): item for key, item in value.items() if isinstance(item, dict)}
 
     @property
-    def research_preferred_providers(self) -> list[str]:
-        return []
-
-    @property
-    def research_disabled_providers(self) -> list[str]:
-        return []
-
-    @property
     def tavily_enabled(self) -> bool:
         return (self._get_config_value("TAVILY_ENABLED", "true") or "true").lower() in ("true", "1", "yes")
 

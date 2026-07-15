@@ -1145,7 +1145,7 @@ def _exit_code(data: dict[str, Any]) -> int:
         return EXIT_CONFIG_ERROR
     if error_type == "parameter_error":
         return EXIT_PARAMETER_ERROR
-    if error_type == "network_error":
+    if error_type in {"network_error", "capability_error"}:
         return EXIT_NETWORK_ERROR
     if error_type == "provider_error":
         return EXIT_NETWORK_ERROR
@@ -2232,6 +2232,7 @@ def _run_advanced_setup_prompts(values: dict[str, str], current: dict[str, str],
         ("SMART_SEARCH_VALIDATION_LEVEL", "Validation level (fast/balanced/strict)", True),
         ("SMART_SEARCH_FALLBACK_MODE", "Fallback mode (auto/off)", True),
         ("SMART_SEARCH_MINIMUM_PROFILE", "Minimum profile (standard/off)", True),
+        ("SMART_SEARCH_OPERATION_CONFIG", "Operation routing JSON", True),
         ("SMART_SEARCH_INTENT_ROUTER", "Intent router mode (hybrid/rules/off)", True),
         ("INTENT_EMBEDDING_API_URL", "Intent embedding API URL", True),
         ("INTENT_EMBEDDING_API_KEY", "Intent embedding API key", True),
@@ -2333,10 +2334,10 @@ async def _run_async(args: argparse.Namespace) -> int:
         )
         return _print_result("map", data, args.format, args.output)
     if args.command == "exa-search":
-        data = await service.exa_search(
+        data = await service.search_sources(
             args.query,
-            num_results=args.num_results,
-            search_type=args.search_type,
+            limit=args.num_results,
+            mode="semantic" if args.search_type == "neural" else args.search_type,
             include_text=args.include_text,
             include_highlights=args.include_highlights,
             start_published_date=args.start_published_date,
@@ -2344,41 +2345,34 @@ async def _run_async(args: argparse.Namespace) -> int:
             exclude_domains=args.exclude_domains,
             category=args.category,
         )
-        return _print_result("exa-search", data, args.format, args.output)
+        return _print_result("search", data, args.format, args.output)
     if args.command == "exa-similar":
-        data = await service.exa_find_similar(args.url, num_results=args.num_results)
-        return _print_result("exa-similar", data, args.format, args.output)
+        data = await service.search_similar(args.url, limit=args.num_results)
+        return _print_result("search", data, args.format, args.output)
     if args.command == "zhipu-search":
-        data = await service.zhipu_search(
-            args.query,
-            count=args.count,
-            search_engine=args.search_engine,
-            search_recency_filter=args.search_recency_filter,
-            search_domain_filter=args.search_domain_filter,
-            content_size=args.content_size,
-        )
-        return _print_result("zhipu-search", data, args.format, args.output)
+        data = await service.search_sources(args.query, limit=args.count, start_published_date=args.search_recency_filter if args.search_recency_filter != "noLimit" else "", include_domains=[args.search_domain_filter] if args.search_domain_filter else [])
+        return _print_result("search", data, args.format, args.output)
     if args.command == "zhipu-mcp-search":
-        data = await service.zhipu_mcp_search(args.query, count=args.count)
-        return _print_result("zhipu-mcp-search", data, args.format, args.output)
+        data = await service.search_sources(args.query, limit=args.count)
+        return _print_result("search", data, args.format, args.output)
     if args.command == "zhipu-mcp-reader":
-        data = await service.zhipu_mcp_reader(args.url)
-        return _print_result("zhipu-mcp-reader", data, args.format, args.output)
+        data = await service.fetch_content(args.url)
+        return _print_result("fetch", data, args.format, args.output)
     if args.command == "zhipu-mcp-search-doc":
-        data = await service.zhipu_mcp_search_doc(args.repo, args.query, max_results=args.max_results)
-        return _print_result("zhipu-mcp-search-doc", data, args.format, args.output)
+        data = await service.docs_search(args.query, source=args.repo)
+        return _print_result("docs", data, args.format, args.output)
     if args.command == "zhipu-mcp-repo-structure":
-        data = await service.zhipu_mcp_repo_structure(args.repo, ref=args.ref)
-        return _print_result("zhipu-mcp-repo-structure", data, args.format, args.output)
+        data = await service.docs_tree(args.repo, ref=args.ref)
+        return _print_result("docs", data, args.format, args.output)
     if args.command == "zhipu-mcp-read-file":
-        data = await service.zhipu_mcp_read_file(args.repo, args.path, ref=args.ref)
-        return _print_result("zhipu-mcp-read-file", data, args.format, args.output)
+        data = await service.docs_read(args.repo, args.path, ref=args.ref)
+        return _print_result("docs", data, args.format, args.output)
     if args.command == "context7-library":
-        data = await service.context7_library(args.name, args.query)
-        return _print_result("context7-library", data, args.format, args.output)
+        data = await service.docs_resolve(args.name, args.query)
+        return _print_result("docs", data, args.format, args.output)
     if args.command == "context7-docs":
-        data = await service.context7_docs(args.library_id, args.query)
-        return _print_result("context7-docs", data, args.format, args.output)
+        data = await service.docs_search(args.query, source=args.library_id)
+        return _print_result("docs", data, args.format, args.output)
     if args.command == "smoke":
         data = await service.smoke(args.mode)
         return _print_result("smoke", data, args.format, args.output)
@@ -2481,6 +2475,7 @@ def _run_setup(args: argparse.Namespace) -> int:
         "SMART_SEARCH_VALIDATION_LEVEL": args.validation_level,
         "SMART_SEARCH_FALLBACK_MODE": args.fallback_mode,
         "SMART_SEARCH_MINIMUM_PROFILE": args.minimum_profile,
+        "SMART_SEARCH_OPERATION_CONFIG": args.operation_config,
         "SMART_SEARCH_INTENT_ROUTER": args.intent_router,
         "INTENT_EMBEDDING_API_URL": _normalize_custom_base_url(args.intent_embedding_api_url),
         "INTENT_EMBEDDING_API_KEY": args.intent_embedding_api_key,
@@ -2983,6 +2978,7 @@ def build_parser() -> argparse.ArgumentParser:
     setup_parser.add_argument("--validation-level", default="", help="Save SMART_SEARCH_VALIDATION_LEVEL.")
     setup_parser.add_argument("--fallback-mode", default="", help="Save SMART_SEARCH_FALLBACK_MODE.")
     setup_parser.add_argument("--minimum-profile", default="", help="Save SMART_SEARCH_MINIMUM_PROFILE.")
+    setup_parser.add_argument("--operation-config", default="", help="Save SMART_SEARCH_OPERATION_CONFIG JSON.")
     setup_parser.add_argument("--intent-router", default="", help="Save SMART_SEARCH_INTENT_ROUTER.")
     setup_parser.add_argument("--intent-embedding-api-url", default="", help="Save INTENT_EMBEDDING_API_URL.")
     setup_parser.add_argument("--intent-embedding-api-key", default="", help="Save INTENT_EMBEDDING_API_KEY.")
@@ -3044,6 +3040,9 @@ def build_parser() -> argparse.ArgumentParser:
         "regression", aliases=COMMAND_ALIASES["regression"], help=argparse.SUPPRESS
     )
     regression_parser.set_defaults(command="regression")
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            action._choices_actions = [choice for choice in action._choices_actions if choice.help != argparse.SUPPRESS]
     return parser
 
 
@@ -3059,9 +3058,45 @@ def _normalize_legacy_argv(argv: list[str]) -> list[str]:
     return argv
 
 
+def _legacy_migration_hint(argv: list[str]) -> str:
+    if not argv:
+        return ""
+    command = argv[0]
+    if command == "search" and len(argv) >= 2 and argv[1] not in {"answer", "sources", "similar", "-h", "--help"}:
+        return "smart-search search answer QUERY"
+    if command == "fetch" and len(argv) >= 2 and argv[1] not in {"content", "extract", "-h", "--help"}:
+        return "smart-search fetch content URL"
+    if command == "map" and len(argv) >= 2 and argv[1] not in {"site", "-h", "--help"}:
+        return "smart-search map site URL"
+    if command == "diagnose" and len(argv) >= 2 and argv[1] == "openai-compatible":
+        return "smart-search diagnose provider openai-compatible"
+    migrations = {
+        "exa-search": "smart-search search sources",
+        "exa-similar": "smart-search search similar",
+        "zhipu-search": "smart-search search sources",
+        "zhipu-mcp-search": "smart-search search sources",
+        "zhipu-mcp-reader": "smart-search fetch content",
+        "zhipu-mcp-search-doc": "smart-search docs search",
+        "zhipu-mcp-repo-structure": "smart-search docs tree",
+        "zhipu-mcp-read-file": "smart-search docs read",
+        "context7-library": "smart-search docs resolve",
+        "context7-docs": "smart-search docs search",
+        "route": "smart-search diagnose route",
+        "route-calibrate": "smart-search diagnose route-calibrate",
+        "smoke": "smart-search diagnose smoke",
+        "regression": "smart-search dev regression",
+        "model": "smart-search config",
+    }
+    return migrations.get(command, "")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    argv = _normalize_legacy_argv(list(sys.argv[1:] if argv is None else argv))
+    original_argv = list(sys.argv[1:] if argv is None else argv)
+    migration = _legacy_migration_hint(original_argv)
+    if migration:
+        print(f"Deprecated command; migrate to: {migration}", file=sys.stderr)
+    argv = _normalize_legacy_argv(original_argv)
     args = parser.parse_args(argv)
     try:
         if args.command == "regression" or (args.command == "dev" and args.dev_command == "regression"):

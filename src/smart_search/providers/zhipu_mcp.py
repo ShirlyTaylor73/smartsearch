@@ -215,13 +215,16 @@ class ZhipuMCPProvider:
         del max_results
         return await self.call_tool("search_doc", {"repo_name": repo, "query": query})
 
-    async def get_repo_structure(self, repo: str, ref: str = "") -> str:
+    async def get_repo_structure(self, repo: str, path: str = "", ref: str = "") -> str:
         arguments = {"repo_name": repo}
+        if path:
+            arguments["dir_path"] = path
         if ref:
-            arguments["dir_path"] = ref
+            arguments["ref"] = ref
         return await self.call_tool("get_repo_structure", arguments)
 
     async def read_file(self, repo: str, path: str, ref: str = "") -> str:
-        del ref
         arguments = {"repo_name": repo, "file_path": path}
+        if ref:
+            arguments["ref"] = ref
         return await self.call_tool("read_file", arguments)

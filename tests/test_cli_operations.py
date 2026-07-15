@@ -56,6 +56,41 @@ def test_operation_profiles_exclude_removed_capabilities():
     assert "deep_research" not in text
 
 
+def test_operation_config_reorders_and_disables(monkeypatch):
+    monkeypatch.setenv("EXA_API_KEY", "exa-key")
+    monkeypatch.setenv("ZHIPU_API_KEY", "zhipu-key")
+    monkeypatch.setenv(
+        "SMART_SEARCH_OPERATION_CONFIG",
+        json.dumps({"search.sources": {"providers": ["zhipu", "exa"], "disabled": ["zhipu"]}}),
+    )
+    candidates, missing = service.operation_candidates("search.sources")
+    assert candidates == ["exa"]
+    assert missing == set()
+
+
+def test_operation_config_can_disable_fallback_and_set_timeout(monkeypatch):
+    monkeypatch.setenv("EXA_API_KEY", "exa-key")
+    monkeypatch.setenv("ZHIPU_API_KEY", "zhipu-key")
+    monkeypatch.setenv(
+        "SMART_SEARCH_OPERATION_CONFIG",
+        json.dumps(
+            {
+                "search.sources": {
+                    "providers": ["zhipu", "exa"],
+                    "fallback": "off",
+                    "timeout": 12,
+                }
+            }
+        ),
+    )
+
+    candidates, missing = service.operation_candidates("search.sources")
+
+    assert candidates == ["zhipu"]
+    assert missing == set()
+    assert service.operation_policy("search.sources") == {"fallback": False, "timeout": 12.0}
+
+
 def test_operation_candidates_require_features(monkeypatch):
     monkeypatch.setenv("EXA_API_KEY", "exa-key")
     candidates, missing = service.operation_candidates(
@@ -66,6 +101,14 @@ def test_operation_candidates_require_features(monkeypatch):
     assert missing == set()
 
 
+def test_provider_profiles_declare_exact_operations():
+    profiles = service.provider_profiles()
+
+    assert profiles["context7"]["operations"] == ["docs.resolve", "docs.search"]
+    assert profiles["exa"]["operations"] == ["docs.search", "search.similar", "search.sources"]
+    assert profiles["firecrawl"]["operations"] == ["fetch.content", "fetch.extract", "search.sources"]
+
+
 @pytest.mark.asyncio
 async def test_docs_tree_does_not_cross_fallback(monkeypatch):
     monkeypatch.delenv("ZHIPU_MCP_API_KEY", raising=False)
@@ -73,6 +116,58 @@ async def test_docs_tree_does_not_cross_fallback(monkeypatch):
     assert result["ok"] is False
     assert result["operation"] == "tree"
     assert result["error_type"] == "config_error"
+
+
+@pytest.mark.asyncio
+async def test_search_sources_feature_negotiation_and_normalization(monkeypatch):
+    monkeypatch.setenv("EXA_API_KEY", "exa-key")
+
+    async def fake_exa(*args, **kwargs):
+        return {"ok": True, "results": [{"title": "Result", "url": "https://example.com", "description": "Snippet"}]}
+
+    monkeypatch.setattr(service, "exa_search", fake_exa)
+    result = await service.search_sources("q", mode="semantic", include_highlights=True)
+    assert result["ok"] is True
+    assert result["operation"] == "sources"
+    assert result["results"][0]["url"] == "https://example.com"
+    assert "provider_attempts" not in result
+
+
+@pytest.mark.asyncio
+async def test_fetch_extract_does_not_fall_back_to_content(monkeypatch):
+    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
+    result = await service.fetch_extract("https://example.com")
+    assert result["ok"] is False
+    assert result["operation"] == "extract"
+    assert result["error_type"] == "config_error"
+    assert result["data"] is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_extract_uses_structured_firecrawl(monkeypatch):
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "firecrawl-key")
+
+    async def fake_extract(url, *, max_length=20000, schema=None):
+        return {"ok": True, "data": {"title": "Page"}, "raw_evidence": '{"title":"Page"}'}
+
+    monkeypatch.setattr(service, "firecrawl_extract", fake_extract)
+    result = await service.fetch_extract("https://example.com", schema={"type": "object"})
+    assert result["ok"] is True
+    assert result["data"] == {"title": "Page"}
+
+
+@pytest.mark.asyncio
+async def test_map_site_is_separate_operation(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
+
+    async def fake_map(url, **kwargs):
+        return {"ok": True, "results": [{"url": f"{url}/docs"}]}
+
+    monkeypatch.setattr(service, "map_site", fake_map)
+    result = await service.map_site_operation("https://example.com", limit=3)
+    assert result["ok"] is True
+    assert result["operation"] == "site"
+    assert result["entries"][0]["url"].endswith("/docs")
 
 
 def test_diagnose_and_dev_command_tree():

@@ -19,35 +19,20 @@ async def test_mock_smoke_passes():
 
     assert result["ok"] is True
     assert result["failed_cases"] == []
-    assert any(case["name"] == "docs_search fallback context7_to_exa" for case in result["cases"])
-    assert any(case["name"] == "deep_research explicit planner simple current prompt uses capability plan" for case in result["cases"])
+    assert any(case["name"] == "operation profile docs.search" for case in result["cases"])
+    assert any(case["name"] == "same-operation fallback contract" for case in result["cases"])
 
 
 @pytest.mark.asyncio
-async def test_mock_smoke_covers_deep_research_capability_matrix():
+async def test_mock_smoke_covers_public_operation_matrix():
     result = await service.smoke("mock")
     case_names = {case["name"] for case in result["cases"]}
 
-    expected = {
-        "deep_research explicit planner simple current prompt uses capability plan",
-        "deep_research docs api prompt uses docs capabilities",
-        "deep_research claim verification requires fetch_before_claim",
-        "deep_research url prompt is fetch first",
-        "deep_research normal search prompt does not trigger",
-        "deep_research missing provider gives capability guidance",
-        "deep_research fixed topic recipes are examples not schema",
-    }
+    expected = {f"operation profile {operation}" for operation in service.OPERATION_PROFILES}
     assert expected <= case_names
-
-    current_case = next(case for case in result["cases"] if case["name"] == "deep_research explicit planner simple current prompt uses capability plan")
-    plan = current_case["research_plan"]
-    assert plan["question"] == "深度搜索一下最近的比特币行情"
-    assert plan["intent_signals"]["recency_requirement"] == "current"
-    assert plan["intent_signals"]["claim_risk"] == "high"
-    assert plan["trigger_source"] == "explicit_cli"
-    assert plan["preflight"]["executed_by_deep_command"] is False
-    assert plan["evidence_policy"] == "fetch_before_claim"
-    assert {"intent_signals", "decomposition", "capability_plan", "gap_check", "usage_boundary"} <= set(plan)
+    assert len(expected) == 10
+    assert "public operation provider matrix" in case_names
+    assert "same-operation fallback contract" in case_names
 
 
 @pytest.mark.asyncio
@@ -60,7 +45,7 @@ async def test_mock_smoke_does_not_depend_on_local_keys(monkeypatch):
 
     assert result["ok"] is True
     assert result["failed_cases"] == []
-    assert any(case["name"] == "doctor minimum profile fails closed" for case in result["cases"])
+    assert all(case["ok"] for case in result["cases"])
 
 
 @pytest.mark.asyncio

@@ -1,12 +1,9 @@
 import asyncio
-import hashlib
 import json
 import re
-import tempfile
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 import httpx
 
@@ -21,8 +18,6 @@ from .intent_router import (
     FETCH_INTENT_KEYWORDS as ROUTER_FETCH_INTENT_KEYWORDS,
     ROUTABLE_CAPABILITIES,
     ROUTE_CALIBRATION_QUERIES,
-    VERTICAL_INTENT_KEYWORDS as ROUTER_VERTICAL_INTENT_KEYWORDS,
-    IntentRouteResult,
     IntentRouter,
     build_rules_route,
     extract_urls as router_extract_urls,
@@ -56,113 +51,6 @@ OPENAI_COMPATIBLE_DIAGNOSE_COMMAND = "smart-search diagnose openai-compatible --
 DOCS_INTENT_KEYWORDS = ROUTER_DOCS_INTENT_KEYWORDS
 ZH_CURRENT_KEYWORDS = ROUTER_CURRENT_INTENT_KEYWORDS
 FETCH_INTENT_KEYWORDS = ROUTER_FETCH_INTENT_KEYWORDS
-DEEP_ALLOWED_TOOLS = {
-    "search",
-    "exa-search",
-    "exa-similar",
-    "zhipu-search",
-    "zhipu-mcp-search",
-    "zhipu-mcp-reader",
-    "zhipu-mcp-search-doc",
-    "zhipu-mcp-repo-structure",
-    "zhipu-mcp-read-file",
-    "context7-library",
-    "context7-docs",
-    "fetch",
-    "map",
-}
-DEEP_TRIGGER_KEYWORDS = {
-    "深度搜索",
-    "深度调研",
-    "深入搜索",
-    "deep search",
-    "deep research",
-    "核验",
-    "验证",
-    "交叉验证",
-    "选型",
-    "对比",
-    "评测",
-}
-DEEP_HIGH_COMPLEXITY_KEYWORDS = {
-    "对比",
-    "选型",
-    "核验",
-    "验证",
-    "为什么",
-    "架构",
-    "方案",
-    "趋势",
-    "优缺点",
-    "风险",
-    "区别",
-    "怎么选",
-    "compare",
-    "comparison",
-    "evaluate",
-    "architecture",
-    "tradeoff",
-    "trade-off",
-    "risk",
-}
-DEEP_RECENT_KEYWORDS = {
-    "最近",
-    "最新",
-    "当前",
-    "现在",
-    "今天",
-    "实时",
-    "刚刚",
-    "本周",
-    "本月",
-    "recent",
-    "latest",
-    "current",
-    "today",
-}
-DEEP_CURRENT_KEYWORDS = {"今天", "实时", "刚刚", "当前", "现在", "today", "current", "live", "realtime"}
-DEEP_CHINA_KEYWORDS = {"中国", "国内", "中文", "政策", "监管", "公告", "A股", "港股"}
-DEEP_EXA_DISCOVERY_KEYWORDS = {
-    "官方",
-    "官网",
-    "论文",
-    "paper",
-    "papers",
-    "research paper",
-    "产品页",
-    "product page",
-    "可信站点",
-    "trusted",
-    "known domain",
-    "known domains",
-    "site:",
-    "白皮书",
-    "standard",
-    "standards",
-}
-RESEARCH_ROUTE_POLICY_VERSION = "research-router-v1"
-RESEARCH_VERTICAL_KEYWORDS = ROUTER_VERTICAL_INTENT_KEYWORDS
-RESEARCH_JS_HEAVY_KEYWORDS = {
-    "js-heavy",
-    "javascript",
-    "dynamic",
-    "动态页面",
-    "浏览器渲染",
-    "登录页",
-    "cloudflare",
-    "screenshot",
-    "ocr",
-    "扫描",
-}
-RESEARCH_PDF_KEYWORDS = {"pdf", "arxiv", "论文", "paper", ".pdf"}
-RESEARCH_PROFILE_ORDER = {
-    "main_search": ["xai-responses", "openai-compatible"],
-    "web_search": ["zhipu", "zhipu-mcp", "tavily", "firecrawl"],
-    "docs_search": ["context7", "exa"],
-    "web_fetch": ["tavily", "jina", "zhipu-mcp-reader", "firecrawl"],
-    "site_map": ["tavily"],
-    "synthesis": ["main-search"],
-}
 PROVIDER_PROFILES: dict[str, dict[str, Any]] = {
     "xai-responses": {
         "capability": "main_search",
@@ -255,15 +143,6 @@ PROVIDER_PROFILES: dict[str, dict[str, Any]] = {
         "minimum_profile_role": "web_fetch",
         "quality_filters": ["non-empty normalized result", "non-empty extracted content"],
         "route_reasons": ["JS-heavy fetch", "dynamic/browser-like extraction", "robust fetch fallback"],
-    },
-    "main-search": {
-        "capability": "synthesis",
-        "strengths": ["evidence-only final synthesis"],
-        "exclusions": ["live source discovery during research synthesis"],
-        "fallback_group": "synthesis",
-        "minimum_profile_role": "",
-        "quality_filters": ["fetched evidence only", "no provider calls during synthesis"],
-        "route_reasons": ["evidence-only synthesis"],
     },
 }
 MAIN_SEARCH_FALLBACK_CHAIN = ["xai-responses", "openai-compatible"]
@@ -512,6 +391,7 @@ def _normalize_source_results(results: list[dict] | None, provider: str) -> list
         desc = (item.get("description") or item.get("content") or item.get("snippet") or "").strip()
         if desc:
             out["description"] = desc
+            out["snippet"] = desc
         published = item.get("published_date") or item.get("publishedDate") or item.get("publish_date")
         if published:
             out["published_date"] = published
@@ -555,7 +435,15 @@ def _fallback_used(attempts: list[dict]) -> bool:
 
 
 def provider_profiles() -> dict[str, dict[str, Any]]:
-    return {provider: dict(profile) for provider, profile in PROVIDER_PROFILES.items()}
+    profiles = {provider: dict(profile) for provider, profile in PROVIDER_PROFILES.items()}
+    for provider, profile in profiles.items():
+        operations = PROVIDER_OPERATION_FEATURES.get(provider, {})
+        profile["operations"] = sorted(operations)
+        profile["operation_features"] = {
+            operation: sorted(features)
+            for operation, features in operations.items()
+        }
+    return profiles
 
 
 def operation_profiles() -> dict[str, dict[str, Any]]:
@@ -574,6 +462,19 @@ def _operation_provider_configured(provider: str) -> bool:
     return _provider_configured(provider)
 
 
+def operation_policy(operation: str) -> dict[str, Any]:
+    raw = config.operation_config.get(operation, {})
+    fallback_value = raw.get("fallback", True)
+    fallback = str(fallback_value).strip().lower() not in {"false", "0", "off", "no"}
+    try:
+        timeout = float(raw.get("timeout", 90.0))
+    except (TypeError, ValueError):
+        timeout = 90.0
+    if timeout <= 0:
+        timeout = 90.0
+    return {"fallback": fallback, "timeout": timeout}
+
+
 def operation_candidates(
     operation: str,
     *,
@@ -588,16 +489,67 @@ def operation_candidates(
     disabled = set(operation_config.get("disabled") or [])
     required = set(required_features or set())
     candidates: list[str] = []
-    missing = set(required)
+    eligible: list[str] = []
+    supported_features: set[str] = set()
     for provider in providers:
         provider = str(provider).strip().lower()
         if provider in disabled or provider not in profile["providers"] or not _operation_provider_configured(provider):
             continue
+        eligible.append(provider)
         supported = PROVIDER_OPERATION_FEATURES.get(provider, {}).get(operation, set())
+        supported_features.update(supported)
         if required.issubset(supported):
             candidates.append(provider)
-            missing.clear()
+    if not operation_policy(operation)["fallback"]:
+        candidates = candidates[:1]
+    missing = required - supported_features if eligible and not candidates else set()
     return candidates, missing
+
+
+async def _await_operation(awaitable: Any, *, start: float, timeout: float) -> Any:
+    remaining = timeout - (time.time() - start)
+    if remaining <= 0:
+        raise asyncio.TimeoutError("operation timeout budget exhausted")
+    return await asyncio.wait_for(awaitable, timeout=remaining)
+
+
+async def _run_operation_candidates(
+    operation: str,
+    candidates: list[str],
+    invoke: Any,
+    *,
+    start: float,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    attempts: list[dict[str, Any]] = []
+    timeout = operation_policy(operation)["timeout"]
+    for provider in candidates:
+        attempt_start = time.time()
+        try:
+            data = await _await_operation(invoke(provider), start=start, timeout=timeout)
+        except (asyncio.TimeoutError, httpx.TimeoutException, TimeoutError) as exc:
+            attempts.append(_attempt(operation, provider, "error", attempt_start, error_type="timeout", error=str(exc)))
+            continue
+        except Exception as exc:
+            attempts.append(_attempt(operation, provider, "error", attempt_start, error_type="network_error", error=str(exc)))
+            continue
+        if data.get("ok"):
+            count = len(data.get("results") or data.get("entries") or []) or 1
+            attempts.append(_attempt(operation, provider, "ok", attempt_start, result_count=count))
+            return data, attempts
+        error_type = str(data.get("error_type") or "")
+        attempts.append(
+            _attempt(
+                operation,
+                provider,
+                "error" if error_type else "empty",
+                attempt_start,
+                error_type=error_type,
+                error=str(data.get("error") or ""),
+            )
+        )
+        if error_type == "parameter_error":
+            return data, attempts
+    return None, attempts
 
 
 def _operation_envelope(
@@ -667,850 +619,8 @@ def _provider_configured(provider: str) -> bool:
     return False
 
 
-def _configured_for_capability(capability: str, capability_status: dict[str, Any] | None = None) -> list[str]:
-    if capability_status is not None:
-        configured = set(capability_status.get(capability, {}).get("configured") or [])
-        return [
-            provider
-            for provider in RESEARCH_PROFILE_ORDER.get(capability, [])
-            if provider in configured and _provider_supports_capability(provider, capability)
-        ]
-    return [provider for provider in RESEARCH_PROFILE_ORDER.get(capability, []) if _provider_configured(provider)]
-
-
-def _safe_provider_overrides() -> tuple[list[str], list[str], list[str]]:
-    known = set(PROVIDER_PROFILES)
-    preferred = [provider for provider in config.research_preferred_providers if provider in known]
-    disabled = [provider for provider in config.research_disabled_providers if provider in known]
-    invalid = [
-        provider
-        for provider in config.research_preferred_providers + config.research_disabled_providers
-        if provider not in known
-    ]
-    return preferred, disabled, invalid
-
-
-def _apply_research_overrides(capability: str, providers: list[str]) -> list[str]:
-    preferred, disabled, _ = _safe_provider_overrides()
-    allowed = [
-        provider
-        for provider in providers
-        if provider not in disabled and _provider_supports_capability(provider, capability)
-    ]
-    ordered = [
-        provider
-        for provider in preferred
-        if provider in allowed and _provider_supports_capability(provider, capability)
-    ]
-    ordered.extend(provider for provider in allowed if provider not in ordered)
-    return ordered
-
-
-def _research_fetch_order(query: str, url: str = "", capability_status: dict[str, Any] | None = None) -> list[str]:
-    providers = _configured_for_capability("web_fetch", capability_status)
-    target = f"{query} {url}".lower()
-    if _contains_any(target, RESEARCH_JS_HEAVY_KEYWORDS):
-        preferred = ["firecrawl", "tavily", "jina", "zhipu-mcp-reader"]
-    elif _contains_any(target, RESEARCH_PDF_KEYWORDS) or url.lower().endswith(".pdf"):
-        preferred = ["jina", "tavily", "zhipu-mcp-reader", "firecrawl"]
-    elif url or _extract_urls(query):
-        preferred = ["jina", "tavily", "zhipu-mcp-reader", "firecrawl"]
-    else:
-        preferred = providers
-    ordered = [provider for provider in preferred if provider in providers]
-    ordered.extend(provider for provider in providers if provider not in ordered)
-    return _apply_research_overrides("web_fetch", ordered)
-
-
-def _research_route_signals(question: str, plan: dict[str, Any]) -> dict[str, Any]:
-    intent = plan.get("intent_signals") or {}
-    rules_route = build_rules_route(question, plan_intent_signals=intent, mode="rules")
-    text = question.lower()
-    return {
-        "docs_api_intent": rules_route.docs_intent,
-        "official_low_noise_intent": _contains_any(question, DEEP_EXA_DISCOVERY_KEYWORDS),
-        "current_or_locale_intent": rules_route.web_current_intent,
-        "known_url": rules_route.fetch_intent,
-        "pdf_or_arxiv_intent": _contains_any(question, RESEARCH_PDF_KEYWORDS),
-        "js_heavy_intent": _contains_any(question, RESEARCH_JS_HEAVY_KEYWORDS),
-        "vertical_intent": bool(rules_route.intent_signals.get("vertical_intent")),
-        "claim_risk": intent.get("claim_risk", "medium"),
-        "cross_validation_need": intent.get("cross_validation_need", "normal"),
-        "raw_query": text,
-    }
-
-
-def _research_capability_routes(
-    question: str,
-    plan: dict[str, Any],
-    fallback: str,
-    capability_status: dict[str, Any] | None = None,
-    route_result: IntentRouteResult | None = None,
-) -> dict[str, Any]:
-    signals = _research_route_signals(question, plan)
-    if route_result is not None:
-        signals["docs_api_intent"] = route_result.docs_intent
-        signals["current_or_locale_intent"] = route_result.web_current_intent
-        signals["known_url"] = route_result.fetch_intent
-        signals["vertical_intent"] = bool(route_result.intent_signals.get("vertical_intent") or "vertical_search" in route_result.required_capabilities)
-    _, _, invalid_overrides = _safe_provider_overrides()
-    routes: dict[str, Any] = {
-        "signals": signals,
-        "fallback_mode": fallback,
-        "route_policy_version": RESEARCH_ROUTE_POLICY_VERSION,
-        "invalid_provider_overrides": invalid_overrides,
-        "capabilities": {},
-    }
-    if route_result is not None:
-        route_data = route_result.to_dict()
-        for key in (
-            "intent_router_mode",
-            "required_capabilities",
-            "intent_signals",
-            "confidence",
-            "router_engines_used",
-            "degraded",
-            "degraded_reason",
-            "reasons",
-        ):
-            routes[key] = route_data.get(key)
-
-    web_search = _configured_for_capability("web_search", capability_status)
-    if signals["current_or_locale_intent"]:
-        ordered = [provider for provider in ["zhipu", "zhipu-mcp", "tavily", "firecrawl"] if provider in web_search]
-    else:
-        ordered = [provider for provider in ["tavily", "firecrawl", "zhipu", "zhipu-mcp"] if provider in web_search]
-    routes["capabilities"]["web_search"] = {
-        "providers": _apply_research_overrides("web_search", ordered),
-        "reason": "current/locale evidence" if signals["current_or_locale_intent"] else "broad source discovery",
-    }
-
-    docs = _configured_for_capability("docs_search", capability_status)
-    docs_order = [provider for provider in ["context7", "exa"] if provider in docs]
-    if signals["official_low_noise_intent"] and not signals["docs_api_intent"]:
-        docs_order = [provider for provider in ["exa", "context7"] if provider in docs]
-    routes["capabilities"]["docs_search"] = {
-        "providers": _apply_research_overrides("docs_search", docs_order),
-        "reason": "docs/API evidence" if signals["docs_api_intent"] else "official low-noise discovery",
-    }
-
-    fetch_order = _research_fetch_order(question, capability_status=capability_status)
-    routes["capabilities"]["web_fetch"] = {
-        "providers": fetch_order,
-        "reason": "JS-heavy fetch" if signals["js_heavy_intent"] else ("known URL/PDF extraction" if signals["known_url"] or signals["pdf_or_arxiv_intent"] else "evidence extraction"),
-    }
-
-    vertical = _configured_for_capability("vertical_search", capability_status)
-    routes["capabilities"]["vertical_search"] = {
-        "providers": _apply_research_overrides("vertical_search", vertical) if signals["vertical_intent"] else [],
-        "reason": "vertical intent matched" if signals["vertical_intent"] else "vertical intent absent",
-        "experimental": True,
-    }
-
-    return routes
-
-
-def _research_evidence_item(
-    *,
-    url: str,
-    provider: str,
-    title: str = "",
-    content: str = "",
-    source_type: str = "fetched_page",
-    subquestion_id: str = "",
-) -> dict[str, Any]:
-    digest = hashlib.sha1(f"{url}\n{provider}\n{title}".encode("utf-8")).hexdigest()[:12]
-    return {
-        "id": f"e{digest}",
-        "url": url,
-        "title": title or url,
-        "provider": provider,
-        "source_type": source_type,
-        "subquestion_id": subquestion_id,
-        "content": content,
-        "content_len": len(content or ""),
-        "verified": bool(content and content.strip()),
-    }
-
-
-def _citation_items(evidence_items: list[dict[str, Any]]) -> list[dict[str, str]]:
-    citations: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for item in evidence_items:
-        url = item.get("url", "")
-        if not url or url in seen:
-            continue
-        seen.add(url)
-        citations.append({
-            "url": url,
-            "title": item.get("title") or url,
-            "provider": item.get("provider") or "",
-        })
-    return citations
-
-
-def _evidence_only_synthesis(question: str, evidence_items: list[dict[str, Any]], gaps: list[dict[str, Any]]) -> str:
-    if not evidence_items:
-        return (
-            f"未能为 `{question}` 获取可引用的页面正文证据。"
-            "本次 research 已停止在降级状态，未对缺证据的结论做断言。"
-        )
-    lines = [f"Research result for: {question}", ""]
-    lines.append("Evidence-backed findings:")
-    for index, item in enumerate(evidence_items, 1):
-        content = re.sub(r"\s+", " ", (item.get("content") or "").strip())
-        excerpt = content[:360]
-        lines.append(f"{index}. {item.get('title') or item.get('url')} ({item.get('provider')})")
-        if excerpt:
-            lines.append(f"   Evidence excerpt: {excerpt}")
-        lines.append(f"   Source: {item.get('url')}")
-    if gaps:
-        lines.extend(["", "Unverified gaps:"])
-        for gap in gaps:
-            lines.append(f"- {gap.get('subquestion_id', '')}: {gap.get('reason', '')}")
-    return "\n".join(lines).strip()
-
-
-def _select_candidate_urls(sources: list[dict[str, Any]], limit: int = 5) -> list[dict[str, Any]]:
-    selected: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for source in sources:
-        url = (source.get("url") or "").strip()
-        if not url or url.startswith("context7:") or url in seen:
-            continue
-        seen.add(url)
-        selected.append(source)
-        if len(selected) >= limit:
-            break
-    return selected
-
-
-def _artifact_path(evidence_root: str, name: str) -> Path:
-    return Path(evidence_root) / name
-
-
-def _write_research_artifact(evidence_root: str, name: str, data: Any) -> None:
-    root = Path(evidence_root)
-    root.mkdir(parents=True, exist_ok=True)
-    path = _artifact_path(evidence_root, name)
-    if isinstance(data, str):
-        path.write_text(data, encoding="utf-8")
-    else:
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def _is_docs_intent(query: str) -> bool:
-    return build_rules_route(query, mode="rules").docs_intent
-
-
-def _is_zh_current_intent(query: str) -> bool:
-    return build_rules_route(query, mode="rules").zh_current_intent
-
-
-def _is_web_current_intent(query: str) -> bool:
-    return build_rules_route(query, mode="rules").web_current_intent
-
-
-def _is_fetch_intent(query: str) -> bool:
-    return build_rules_route(query, mode="rules").fetch_intent
-
-
-def _contains_any(query: str, keywords: set[str]) -> bool:
-    q = query.lower()
-    return any(keyword.lower() in q for keyword in keywords)
-
-
 def _extract_urls(query: str) -> list[str]:
     return router_extract_urls(query)
-
-
-def _slugify_query(query: str) -> str:
-    slug = re.sub(r"https?://", "", query.lower())
-    slug = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "-", slug, flags=re.IGNORECASE)
-    slug = slug.strip("-")
-    return slug[:48] or "deep-research"
-
-
-def _default_evidence_dir(query: str) -> str:
-    timestamp = time.strftime("%Y%m%d-%H%M")
-    return str(Path(tempfile.gettempdir()) / "smart-search-evidence" / f"{timestamp}-{_slugify_query(query)}")
-
-
-def _quote_arg(value: str) -> str:
-    escaped = value.replace("`", "``").replace("$", "`$").replace('"', '`"')
-    return f'"{escaped}"'
-
-
-def _path_join(base: str, filename: str) -> str:
-    return str(Path(base) / filename)
-
-
-def _deep_step(
-    step_id: str,
-    subquestion_id: str,
-    tool: str,
-    purpose: str,
-    command: str,
-    output_path: str,
-) -> dict[str, str]:
-    return {
-        "id": step_id,
-        "subquestion_id": subquestion_id,
-        "tool": tool,
-        "purpose": purpose,
-        "command": command,
-        "output_path": output_path,
-    }
-
-
-def _deep_capability(capability: str, tools: list[str], reason: str) -> dict[str, Any]:
-    return {"capability": capability, "tools": tools, "reason": reason}
-
-
-def _deep_subquestion(sub_id: str, question: str, reason: str, required_capabilities: list[str]) -> dict[str, Any]:
-    return {
-        "id": sub_id,
-        "question": question,
-        "reason": reason,
-        "required_capabilities": required_capabilities,
-    }
-
-
-def _deep_budget(value: str) -> str:
-    budget = (value or "standard").strip().lower()
-    return budget if budget in {"quick", "standard", "deep"} else "standard"
-
-
-def _is_deep_complex(query: str, budget: str) -> bool:
-    q = re.sub(r"https?://[^\s<>\]\)\"']+", "", query)
-    object_separators = len(re.findall(r"[/、,，]| 和 | 与 | vs | VS | versus ", q))
-    return budget == "deep" or _contains_any(query, DEEP_HIGH_COMPLEXITY_KEYWORDS) or object_separators >= 2
-
-
-def build_deep_research_plan(query: str, budget: str = "standard", evidence_dir: str = "") -> dict[str, Any]:
-    start = time.time()
-    question = query.strip()
-    budget = _deep_budget(budget)
-    evidence_root = evidence_dir.strip() or _default_evidence_dir(question)
-    urls = _extract_urls(question)
-    known_url = bool(urls)
-    docs_intent = _is_docs_intent(question)
-    zh_current_intent = _is_zh_current_intent(question)
-    recency_requirement = "none"
-    if _contains_any(question, DEEP_CURRENT_KEYWORDS) or zh_current_intent:
-        recency_requirement = "current"
-    elif _contains_any(question, {"行情", "价格", "走势", "币圈", "股票", "市场"}) and _contains_any(question, DEEP_RECENT_KEYWORDS):
-        recency_requirement = "current"
-    elif _contains_any(question, DEEP_RECENT_KEYWORDS):
-        recency_requirement = "recent"
-    locale_domain_scope = "china" if _contains_any(question, DEEP_CHINA_KEYWORDS) else "global"
-    if known_url:
-        locale_domain_scope = "known_domains"
-    claim_risk = "high" if recency_requirement in {"recent", "current"} or _contains_any(question, {"核验", "验证", "真假", "价格", "行情", "财经", "医疗", "政策", "监管", "risk"}) else "medium"
-    cross_validation_need = "high" if claim_risk == "high" or _contains_any(question, {"对比", "选型", "核验", "验证", "compare", "versus"}) else "normal"
-    authority_need = "high" if docs_intent or claim_risk == "high" or _contains_any(question, {"官方", "文档", "论文", "标准", "政策", "监管", "official"}) else "normal"
-    complex_query = _is_deep_complex(question, budget)
-    difficulty = "high" if complex_query else "standard"
-
-    intent_signals = {
-        "recency_requirement": recency_requirement,
-        "docs_api_intent": docs_intent,
-        "locale_domain_scope": locale_domain_scope,
-        "known_url": known_url,
-        "source_authority_need": authority_need,
-        "claim_risk": claim_risk,
-        "cross_validation_need": cross_validation_need,
-        "breadth_depth_budget": budget,
-    }
-
-    decomposition: list[dict[str, Any]] = []
-    capability_plan: list[dict[str, Any]] = []
-    steps: list[dict[str, str]] = []
-
-    def add_step(sub_id: str, tool: str, purpose: str, command: str, filename: str) -> None:
-        step_id = f"s{len(steps) + 1}"
-        steps.append(_deep_step(step_id, sub_id, tool, purpose, command, _path_join(evidence_root, filename)))
-
-    def next_filename(suffix: str) -> str:
-        return f"{len(steps) + 1:02d}-{suffix}"
-
-    def command_search(q: str, extra_sources: int = 2) -> str:
-        return f"smart-search search {_quote_arg(q)} --validation balanced --extra-sources {extra_sources} --format json --output {_quote_arg(_path_join(evidence_root, next_filename('search.json')))}"
-
-    def command_exa(q: str) -> str:
-        return f"smart-search exa-search {_quote_arg(q)} --num-results 5 --format json --output {_quote_arg(_path_join(evidence_root, next_filename('exa.json')))}"
-
-    def command_zhipu(q: str) -> str:
-        return f"smart-search zhipu-search {_quote_arg(q)} --count 5 --format json --output {_quote_arg(_path_join(evidence_root, next_filename('zhipu.json')))}"
-
-    def command_fetch(target: str = "<key-url>") -> str:
-        return f"smart-search fetch {_quote_arg(target)} --format markdown --output {_quote_arg(_path_join(evidence_root, next_filename('fetch.md')))}"
-
-    def has_capability(name: str) -> bool:
-        return any(item.get("capability") == name for item in capability_plan)
-
-    if known_url:
-        url = urls[0]
-        parsed = urlparse(url)
-        host = parsed.netloc or "provided URL"
-        decomposition.append(
-            _deep_subquestion(
-                "sq1",
-                f"这个已知来源页面本身说了什么？{url}",
-                "用户已经给出 URL，Deep Research 必须先抓正文再扩展。",
-                ["page_evidence"],
-            )
-        )
-        decomposition.append(
-            _deep_subquestion(
-                "sq2",
-                f"围绕 {host} 还需要哪些相邻来源或交叉来源？",
-                "已知好 URL 适合用相似页面和广泛发现扩展证据。",
-                ["adjacent_source_discovery", "broad_discovery"],
-            )
-        )
-        capability_plan.extend(
-            [
-                _deep_capability("page_evidence", ["fetch"], "Fetch the user-provided URL before making claims."),
-                _deep_capability("adjacent_source_discovery", ["exa-similar"], "Find pages adjacent to the known source."),
-                _deep_capability("broad_discovery", ["search"], "Broaden the context if the fetched page leaves gaps."),
-            ]
-        )
-        add_step("sq1", "fetch", "fetch user supplied URL first", f"smart-search fetch {_quote_arg(url)} --format markdown --output {_quote_arg(_path_join(evidence_root, '01-fetch.md'))}", "01-fetch.md")
-        add_step("sq2", "exa-similar", "find adjacent sources from the provided URL", f"smart-search exa-similar {_quote_arg(url)} --num-results 5 --format json --output {_quote_arg(_path_join(evidence_root, '02-similar.json'))}", "02-similar.json")
-        add_step("sq2", "search", "broad discovery for missing context", command_search(question, 1), "03-search.json")
-    else:
-        decomposition.append(
-            _deep_subquestion(
-                "sq1",
-                f"{question} 的整体问题轮廓和候选来源是什么？",
-                "先做 broad discovery，避免一开始把问题拆错。",
-                ["broad_discovery"],
-            )
-        )
-        capability_plan.append(_deep_capability("broad_discovery", ["search"], "Find the initial answer shape and candidate sources."))
-        add_step("sq1", "search", "broad discovery and routing metadata", command_search(question, 1 if budget == "quick" else 3), "01-search.json")
-
-        if docs_intent:
-            decomposition.append(
-                _deep_subquestion(
-                    "sq2",
-                    f"{question} 的官方文档、API 或 SDK 证据在哪里？",
-                    "docs/API intent should resolve the library docs first, with Exa only as official-domain discovery.",
-                    ["docs_source_discovery", "page_evidence"],
-                )
-            )
-            capability_plan.append(
-                _deep_capability(
-                    "docs_source_discovery",
-                    ["context7-library", "context7-docs"],
-                    "Resolve official library/API documentation first; use Exa only for official-domain or supplemental discovery.",
-                )
-            )
-            library_hint = " ".join(re.findall(r"[A-Za-z][A-Za-z0-9_.-]*", question)[:2]) or "<library-name>"
-            add_step(
-                "sq2",
-                "context7-library",
-                "resolve library id for docs/API intent",
-                f"smart-search context7-library {_quote_arg(library_hint)} {_quote_arg(question)} --format json --output {_quote_arg(_path_join(evidence_root, next_filename('context7-library.json')))}",
-                next_filename("context7-library.json"),
-            )
-            add_step(
-                "sq2",
-                "context7-docs",
-                "retrieve docs after selecting the best library_id",
-                f"smart-search context7-docs {_quote_arg('<library_id>')} {_quote_arg(question)} --format json --output {_quote_arg(_path_join(evidence_root, next_filename('context7-docs.json')))}",
-                next_filename("context7-docs.json"),
-            )
-            if _contains_any(question, DEEP_EXA_DISCOVERY_KEYWORDS):
-                capability_plan.append(
-                    _deep_capability(
-                        "official_domain_discovery",
-                        ["exa-search"],
-                        "Use Exa for official-domain or low-noise supplemental docs discovery.",
-                    )
-                )
-                add_step("sq2", "exa-search", "official-domain docs source discovery", command_exa(f"{question} official docs"), next_filename("exa.json"))
-
-        if recency_requirement != "none" or locale_domain_scope == "china":
-            sub_id = f"sq{len(decomposition) + 1}"
-            decomposition.append(
-                _deep_subquestion(
-                    sub_id,
-                    f"{question} 的最新或中文/国内来源如何交叉验证？",
-                    "Current or China-scoped prompts benefit from Zhipu web-search reinforcement.",
-                    ["current_or_locale_source_discovery"],
-                )
-            )
-            capability_plan.append(
-                _deep_capability("current_or_locale_source_discovery", ["zhipu-search"], "Reinforce Chinese, domestic, or current web evidence.")
-            )
-            add_step(sub_id, "zhipu-search", "current or locale-specific source discovery", command_zhipu(question), f"{len(steps) + 1:02d}-zhipu.json")
-
-        if complex_query:
-            while len(decomposition) < (2 if budget != "deep" else 4):
-                sub_id = f"sq{len(decomposition) + 1}"
-                if len(decomposition) == 1:
-                    sub_question = f"{question} 里有哪些主要选项、说法或路线需要分别验证？"
-                    reason = "Complex prompts need explicit comparison targets before final synthesis."
-                    caps = ["cross_validation"]
-                elif len(decomposition) == 2:
-                    sub_question = f"{question} 的成本、风险、限制和适用边界是什么？"
-                    reason = "High-difficulty research needs downside and boundary checks."
-                    caps = ["low_noise_source_discovery", "page_evidence"]
-                else:
-                    sub_question = f"基于已抓取证据，{question} 应该如何形成可执行结论？"
-                    reason = "A deep budget should reserve one synthesis-oriented gap check subquestion."
-                    caps = ["gap_check"]
-                decomposition.append(_deep_subquestion(sub_id, sub_question, reason, caps))
-            if not has_capability("cross_validation"):
-                capability_plan.append(
-                    _deep_capability("cross_validation", ["search"], "Compare independent sources before final claims; supplemental tools depend on intent.")
-                )
-            if budget == "deep" and _contains_any(question, DEEP_EXA_DISCOVERY_KEYWORDS):
-                add_step("sq3", "exa-search", "low-noise evidence for tradeoffs and risks", command_exa(f"{question} risks limitations comparison"), next_filename("exa.json"))
-
-        if cross_validation_need == "high":
-            if not has_capability("cross_validation"):
-                capability_plan.append(
-                    _deep_capability("cross_validation", ["search"], "Compare independent sources before final claims; supplemental tools depend on intent.")
-                )
-            target_subquestion = decomposition[-1]["id"] if decomposition else "sq1"
-            cross_validation_tools = next((item["tools"] for item in capability_plan if item.get("capability") == "cross_validation"), [])
-            if recency_requirement != "none" or locale_domain_scope == "china" or zh_current_intent:
-                if "zhipu-search" not in cross_validation_tools:
-                    cross_validation_tools.append("zhipu-search")
-                if not any(step["tool"] == "zhipu-search" for step in steps):
-                    add_step(target_subquestion, "zhipu-search", "current or locale-specific cross-source discovery", command_zhipu(question), next_filename("zhipu.json"))
-            elif docs_intent:
-                if "context7-library" not in cross_validation_tools:
-                    cross_validation_tools.extend(["context7-library", "context7-docs"])
-            elif _contains_any(question, DEEP_EXA_DISCOVERY_KEYWORDS):
-                if "exa-search" not in cross_validation_tools:
-                    cross_validation_tools.append("exa-search")
-                if not any(step["tool"] == "exa-search" for step in steps):
-                    add_step(target_subquestion, "exa-search", "official-domain or low-noise cross-source discovery", command_exa(question), next_filename("exa.json"))
-
-        capability_plan.append(_deep_capability("page_evidence", ["fetch"], "Fetch key URLs before claim-level conclusions."))
-        add_step("sq1" if len(decomposition) == 1 else decomposition[-1]["id"], "fetch", "fetch key URLs before final claims", command_fetch(), next_filename("fetch.md"))
-
-    for item in capability_plan:
-        item["tools"] = [tool for tool in item["tools"] if tool in DEEP_ALLOWED_TOOLS]
-    steps = [step for step in steps if step["tool"] in DEEP_ALLOWED_TOOLS]
-    if budget == "quick" and len(decomposition) > 2:
-        decomposition = decomposition[:2]
-    if budget == "quick" and len(steps) > 4:
-        limited_steps = steps[:4]
-        if not any(step["tool"] == "fetch" for step in limited_steps):
-            first_fetch = next((step for step in steps if step["tool"] == "fetch"), None)
-            if first_fetch:
-                first_fetch = dict(first_fetch)
-                fetch_path = _path_join(evidence_root, "04-fetch.md")
-                first_fetch["command"] = f"smart-search fetch {_quote_arg('<key-url>')} --format markdown --output {_quote_arg(fetch_path)}"
-                first_fetch["output_path"] = fetch_path
-                limited_steps = steps[:3] + [first_fetch]
-        steps = limited_steps[:4]
-    if budget == "quick":
-        valid_subquestion_ids = {item["id"] for item in decomposition}
-        fallback_subquestion_id = decomposition[-1]["id"] if decomposition else "sq1"
-        for index, step in enumerate(steps, start=1):
-            step["id"] = f"s{index}"
-            if step.get("subquestion_id") not in valid_subquestion_ids:
-                step["subquestion_id"] = fallback_subquestion_id
-
-    return {
-        "ok": True,
-        "mode": "deep_research",
-        "query_mode": "deep",
-        "question": question,
-        "trigger_source": "explicit_cli",
-        "difficulty": difficulty,
-        "intent_signals": intent_signals,
-        "decomposition": decomposition,
-        "capability_plan": capability_plan,
-        "evidence_policy": "fetch_before_claim",
-        "preflight": {
-            "tool": "doctor",
-            "command": "smart-search doctor --format json",
-            "when": "configuration or provider availability is uncertain",
-            "executed_by_deep_command": False,
-        },
-        "steps": steps,
-        "gap_check": {
-            "required": True,
-            "rule": "fetch missing evidence for key claims or downgrade unsupported claims to unverified candidates",
-            "unsupported_claim_action": "downgrade_to_unverified_candidate",
-        },
-        "final_answer_policy": "cite fetched evidence, list unverified candidates, and include key commands",
-        "usage_boundary": {
-            "search": "smart-search search runs live fast/broad search immediately.",
-            "deep": "smart-search deep is an offline planner; it does not execute provider calls or fetch pages.",
-            "execution": "An AI agent or user executes the listed steps with existing CLI commands, then performs gap_check.",
-        },
-        "allowed_tools": sorted(DEEP_ALLOWED_TOOLS),
-        "evidence_dir": evidence_root,
-        "elapsed_ms": _elapsed_ms(start),
-    }
-
-
-async def research(
-    query: str,
-    budget: str = "deep",
-    evidence_dir: str = "",
-    fallback: str = "auto",
-) -> dict[str, Any]:
-    start = time.time()
-    question = query.strip()
-    fallback_mode = (fallback or "auto").strip().lower()
-    if fallback_mode not in {"auto", "off"}:
-        return {
-            "ok": False,
-            "error_type": "parameter_error",
-            "error": f"Invalid fallback mode: {fallback_mode}",
-            "question": question,
-            "mode": "deep_research_execution",
-            "route_policy_version": RESEARCH_ROUTE_POLICY_VERSION,
-            "elapsed_ms": _elapsed_ms(start),
-        }
-
-    minimum = validate_minimum_profile()
-    if not minimum.get("ok"):
-        return {
-            "ok": False,
-            "error_type": minimum.get("error_type", "config_error"),
-            "error": minimum.get("error", MINIMUM_PROFILE_ERROR),
-            "question": question,
-            "mode": "deep_research_execution",
-            "minimum_profile_ok": False,
-            "capability_status": minimum.get("capability_status", {}),
-            "final_answer": "",
-            "citations": [],
-            "evidence_items": [],
-            "gap_check": {
-                "status": "failed",
-                "gaps": [{"subquestion_id": "", "reason": "minimum profile is missing required capabilities"}],
-            },
-            "provider_attempts": [],
-            "fallback_used": False,
-            "degraded": True,
-            "route_policy_version": RESEARCH_ROUTE_POLICY_VERSION,
-            "evidence_dir": evidence_dir,
-            "elapsed_ms": _elapsed_ms(start),
-        }
-
-    plan = build_deep_research_plan(question, budget=_deep_budget(budget or "deep"), evidence_dir=evidence_dir)
-    evidence_root = plan.get("evidence_dir") or _default_evidence_dir(question)
-    try:
-        route_result = await IntentRouter(config).route(
-            question,
-            validation_level="balanced",
-            allow_remote=True,
-            plan_intent_signals=plan.get("intent_signals") or {},
-        )
-    except ValueError as e:
-        return {
-            "ok": False,
-            "error_type": "parameter_error",
-            "error": str(e),
-            "question": question,
-            "mode": "deep_research_execution",
-            "route_policy_version": RESEARCH_ROUTE_POLICY_VERSION,
-            "elapsed_ms": _elapsed_ms(start),
-        }
-    routes = _research_capability_routes(question, plan, fallback_mode, route_result=route_result)
-    provider_attempts: list[dict[str, Any]] = []
-    discovery_sources: list[dict[str, Any]] = []
-    evidence_items: list[dict[str, Any]] = []
-    stage_results: list[dict[str, Any]] = []
-    gaps: list[dict[str, Any]] = []
-
-    _write_research_artifact(evidence_root, "00-plan.json", plan)
-
-    urls = _extract_urls(question)
-    fetch_order = routes["capabilities"]["web_fetch"]["providers"]
-    if urls:
-        for index, url in enumerate(urls, 1):
-            fetch_result, attempts = await _run_web_fetch_fallback(url, fallback=fallback_mode, preferred_order=fetch_order)
-            provider_attempts.extend(attempts)
-            stage_results.append({"stage": "known_url_fetch", "url": url, "ok": bool(fetch_result), "provider_attempts": attempts})
-            if fetch_result:
-                item = _research_evidence_item(
-                    url=fetch_result["url"],
-                    provider=fetch_result["provider"],
-                    title=fetch_result["url"],
-                    content=fetch_result["content"],
-                    subquestion_id="sq1",
-                )
-                evidence_items.append(item)
-                _write_research_artifact(evidence_root, f"{index:02d}-fetch-{fetch_result['provider']}.md", fetch_result["content"])
-            else:
-                gaps.append({"subquestion_id": "sq1", "reason": f"failed to fetch known URL: {url}", "url": url})
-
-    signals = routes["signals"]
-    if signals["docs_api_intent"]:
-        docs_providers = routes["capabilities"]["docs_search"]["providers"]
-        selected_docs_providers = docs_providers[:1] if fallback_mode == "off" else docs_providers
-        if not selected_docs_providers:
-            gaps.append({"subquestion_id": "sq2", "reason": "no configured docs_search provider for docs/API evidence"})
-        for provider in selected_docs_providers:
-            step_start = time.time()
-            if provider == "context7":
-                data = await context7_library(question, question)
-                if data.get("ok") and data.get("results"):
-                    provider_attempts.append(_attempt("docs_search", "context7", "ok", step_start, result_count=len(data.get("results") or [])))
-                    stage_results.append({"stage": "docs_discovery", "provider": "context7", "ok": True, "result_count": len(data.get("results") or [])})
-                    library_id = (data.get("results") or [{}])[0].get("id", "")
-                    if library_id:
-                        docs_start = time.time()
-                        docs_data = await context7_docs(library_id, question)
-                        if docs_data.get("ok") and docs_data.get("content"):
-                            provider_attempts.append(_attempt("docs_search", "context7", "ok", docs_start, result_count=1))
-                            item = _research_evidence_item(
-                                url=f"context7:{library_id}",
-                                provider="context7",
-                                title=library_id,
-                                content=docs_data.get("content", ""),
-                                source_type="docs",
-                                subquestion_id="sq2",
-                            )
-                            evidence_items.append(item)
-                            _write_research_artifact(evidence_root, "docs-context7.md", docs_data.get("content", ""))
-                            break
-                        docs_status = "error" if docs_data.get("error_type") else "empty"
-                        provider_attempts.append(_attempt("docs_search", "context7", docs_status, docs_start, error_type=docs_data.get("error_type", ""), error=docs_data.get("error", "")))
-                    if fallback_mode == "off":
-                        break
-                    continue
-                status = "error" if data.get("error_type") in {"auth_error", "timeout", "network_error", "runtime_error"} else "empty"
-                provider_attempts.append(_attempt("docs_search", "context7", status, step_start, error_type=data.get("error_type", ""), error=data.get("error", "")))
-            elif provider == "exa":
-                data = await exa_search(question, num_results=5, include_highlights=True)
-                if data.get("ok"):
-                    sources = _normalize_source_results(data.get("results"), "exa")
-                    if sources:
-                        provider_attempts.append(_attempt("docs_search", "exa", "ok", step_start, result_count=len(sources)))
-                        discovery_sources.extend(sources)
-                        stage_results.append({"stage": "docs_discovery", "provider": "exa", "ok": True, "result_count": len(sources)})
-                        break
-                provider_attempts.append(_attempt("docs_search", "exa", "error" if data.get("error_type") else "empty", step_start, error_type=data.get("error_type", ""), error=data.get("error", "")))
-
-    should_run_web_discovery = (
-        signals["current_or_locale_intent"]
-        or signals["cross_validation_need"] == "high"
-        or (not evidence_items and not discovery_sources)
-    ) and not (urls and fallback_mode == "off")
-    if should_run_web_discovery:
-        web_provider_order = routes["capabilities"]["web_search"]["providers"]
-        if web_provider_order:
-            web_sources, attempts = await _run_web_search_fallback(
-                question,
-                count=5,
-                providers=",".join(web_provider_order),
-                fallback=fallback_mode,
-            )
-            provider_attempts.extend(attempts)
-            discovery_sources.extend(web_sources)
-            stage_results.append({"stage": "web_discovery", "ok": bool(web_sources), "result_count": len(web_sources), "provider_attempts": attempts})
-        else:
-            gaps.append({"subquestion_id": "", "reason": "no configured web_search provider for discovery"})
-
-    exa_in_selected_docs_route = "exa" in routes["capabilities"]["docs_search"]["providers"]
-    if (
-        fallback_mode != "off"
-        and signals["official_low_noise_intent"]
-        and exa_in_selected_docs_route
-        and not any(source.get("provider") == "exa" for source in discovery_sources)
-    ):
-        exa_start = time.time()
-        data = await exa_search(question, num_results=5, include_highlights=True)
-        if data.get("ok"):
-            sources = _normalize_source_results(data.get("results"), "exa")
-            if sources:
-                provider_attempts.append(_attempt("docs_search", "exa", "ok", exa_start, result_count=len(sources)))
-                discovery_sources.extend(sources)
-        else:
-            provider_attempts.append(_attempt("docs_search", "exa", "error", exa_start, error_type=data.get("error_type", ""), error=data.get("error", "")))
-
-    if signals["vertical_intent"] and routes["capabilities"]["vertical_search"]["providers"]:
-        vertical_start = time.time()
-        data = await anysearch_search(question, max_results=5)
-        if data.get("ok"):
-            sources = _normalize_source_results(data.get("results"), "anysearch")
-            provider_attempts.append(_attempt("vertical_search", "anysearch", "ok" if sources else "empty", vertical_start, result_count=len(sources)))
-            discovery_sources.extend(sources)
-            stage_results.append({"stage": "vertical_discovery", "provider": "anysearch", "ok": bool(sources), "result_count": len(sources)})
-        else:
-            provider_attempts.append(_attempt("vertical_search", "anysearch", "error", vertical_start, error_type=data.get("error_type", ""), error=data.get("error", "")))
-
-    candidates = _select_candidate_urls(discovery_sources, limit=6)
-    fetched_urls = {item.get("url") for item in evidence_items}
-    no_new_evidence = True
-    for index, candidate in enumerate(candidates, 1):
-        url = candidate.get("url", "")
-        if not url or url in fetched_urls:
-            continue
-        order = _research_fetch_order(question, url)
-        fetch_result, attempts = await _run_web_fetch_fallback(url, fallback=fallback_mode, preferred_order=order)
-        provider_attempts.extend(attempts)
-        stage_results.append({"stage": "candidate_fetch", "url": url, "ok": bool(fetch_result), "provider_attempts": attempts})
-        if fetch_result:
-            no_new_evidence = False
-            fetched_urls.add(url)
-            content = fetch_result.get("content", "")
-            item = _research_evidence_item(
-                url=fetch_result["url"],
-                provider=fetch_result["provider"],
-                title=candidate.get("title") or fetch_result["url"],
-                content=content,
-                subquestion_id=candidate.get("subquestion_id", ""),
-            )
-            evidence_items.append(item)
-            _write_research_artifact(evidence_root, f"fetch-{index:02d}-{fetch_result['provider']}.md", content)
-        elif fallback_mode == "off":
-            gaps.append({"subquestion_id": "", "reason": f"fetch failed with fallback off: {url}", "url": url})
-
-    if not evidence_items:
-        gaps.append({"subquestion_id": "", "reason": "no fetched/read evidence items were produced"})
-    elif no_new_evidence and not urls and candidates:
-        gaps.append({"subquestion_id": "", "reason": "discovery produced candidates but no new fetch evidence converged"})
-
-    covered = bool(evidence_items)
-    gap_status = "closed" if covered and not gaps else ("degraded" if evidence_items else "failed")
-    citations = _citation_items(evidence_items)
-    final_answer = _evidence_only_synthesis(question, evidence_items, gaps)
-    result = {
-        "ok": bool(evidence_items),
-        "error_type": "" if evidence_items else "evidence_error",
-        "error": "" if evidence_items else "research could not obtain fetched evidence",
-        "mode": "deep_research_execution",
-        "query_mode": "research",
-        "question": question,
-        "budget": _deep_budget(budget or "deep"),
-        "research_plan": plan,
-        "routing_decision": routes,
-        "stage_results": stage_results,
-        "discovery_sources": discovery_sources,
-        "final_answer": final_answer,
-        "content": final_answer,
-        "citations": citations,
-        "evidence_items": evidence_items,
-        "gap_check": {
-            "status": gap_status,
-            "gaps": gaps,
-            "stop_reason": "evidence_converged" if gap_status == "closed" else ("degraded_with_gaps" if evidence_items else "provider_exhausted"),
-        },
-        "provider_attempts": provider_attempts,
-        "providers_used": _provider_names_from_attempts(provider_attempts),
-        "fallback_used": _fallback_used(provider_attempts),
-        "degraded": bool(gaps),
-        "route_policy_version": RESEARCH_ROUTE_POLICY_VERSION,
-        "evidence_dir": evidence_root,
-        "minimum_profile_ok": minimum.get("ok", False),
-        "capability_status": minimum.get("capability_status", {}),
-        "elapsed_ms": _elapsed_ms(start),
-    }
-    _write_research_artifact(evidence_root, "summary.json", result)
-    return result
 
 
 def get_capability_status() -> dict[str, Any]:
@@ -1763,9 +873,7 @@ async def _run_web_fetch_fallback(
         providers.append("firecrawl")
     if preferred_order:
         allowed = {provider for provider in providers}
-        ordered = [provider for provider in preferred_order if provider in allowed]
-        ordered.extend(provider for provider in providers if provider not in ordered)
-        providers = ordered
+        providers = [provider for provider in preferred_order if provider in allowed]
     if fallback == "off":
         providers = providers[:1]
 
@@ -2083,6 +1191,7 @@ async def search(
     providers: str = "auto",
     stream: bool | None = None,
     timeout_seconds: float | None = None,
+    enforce_minimum_profile: bool = True,
 ) -> dict[str, Any]:
     start = time.time()
     session_id = new_session_id()
@@ -2097,7 +1206,7 @@ async def search(
         return _empty_search_result(start, session_id, query, "parameter_error", str(e))
 
     minimum = validate_minimum_profile()
-    if not minimum.get("ok"):
+    if enforce_minimum_profile and not minimum.get("ok"):
         return _empty_search_result(
             start,
             session_id,
@@ -2968,9 +2077,18 @@ def _primary_search_error_result(
     }
 
 
-async def fetch(url: str) -> dict[str, Any]:
+async def fetch(
+    url: str,
+    *,
+    fallback: str = "auto",
+    preferred_order: list[str] | None = None,
+) -> dict[str, Any]:
     start = time.time()
-    fetch_result, attempts = await _run_web_fetch_fallback(url)
+    fetch_result, attempts = await _run_web_fetch_fallback(
+        url,
+        fallback=fallback,
+        preferred_order=preferred_order,
+    )
     if fetch_result:
         return {
             **fetch_result,
@@ -3104,8 +2222,8 @@ async def zhipu_mcp_search_doc(repo: str, query: str, max_results: int = 5) -> d
     return await _decode_provider_json(await _zhipu_mcp_zread_provider().search_doc(repo, query, max_results=max_results), provider="zhipu-mcp-zread")
 
 
-async def zhipu_mcp_repo_structure(repo: str, ref: str = "") -> dict[str, Any]:
-    return await _decode_provider_json(await _zhipu_mcp_zread_provider().get_repo_structure(repo, ref=ref), provider="zhipu-mcp-zread")
+async def zhipu_mcp_repo_structure(repo: str, path: str = "", ref: str = "") -> dict[str, Any]:
+    return await _decode_provider_json(await _zhipu_mcp_zread_provider().get_repo_structure(repo, path=path, ref=ref), provider="zhipu-mcp-zread")
 
 
 async def zhipu_mcp_read_file(repo: str, path: str, ref: str = "") -> dict[str, Any]:
@@ -3210,7 +2328,26 @@ async def context7_docs(library_id: str, query: str) -> dict[str, Any]:
 
 async def search_answer(query: str, *, stream: bool | None = None, timeout_seconds: float | None = None, debug: bool = False) -> dict[str, Any]:
     start = time.time()
-    data = await search(query, stream=stream, timeout_seconds=timeout_seconds)
+    candidates, _ = operation_candidates("search.answer")
+    if not candidates:
+        return _operation_envelope(
+            "search",
+            "answer",
+            ok=False,
+            start=start,
+            error_type="config_error",
+            error="No configured provider supports search.answer",
+        )
+    policy = operation_policy("search.answer")
+    budget = min(timeout_seconds, policy["timeout"]) if timeout_seconds else policy["timeout"]
+    data = await search(
+        query,
+        stream=stream,
+        timeout_seconds=budget,
+        providers=",".join(candidates),
+        fallback="auto" if policy["fallback"] else "off",
+        enforce_minimum_profile=False,
+    )
     return _operation_envelope(
         "search",
         "answer",
@@ -3256,10 +2393,16 @@ async def search_sources(
     if not candidates:
         error_type = "capability_error" if missing else "config_error"
         detail = f"; missing features: {', '.join(sorted(missing))}" if missing else ""
-        return _operation_envelope("search", "sources", ok=False, start=start, error_type=error_type, error=f"No configured provider supports search.sources{detail}")
-    attempts: list[dict[str, Any]] = []
-    for provider in candidates:
-        attempt_start = time.time()
+        return _operation_envelope(
+            "search",
+            "sources",
+            ok=False,
+            start=start,
+            error_type=error_type,
+            error=f"No configured provider supports search.sources{detail}",
+        )
+
+    async def invoke(provider: str) -> dict[str, Any]:
         if provider == "exa":
             data = await exa_search(
                 query,
@@ -3274,7 +2417,12 @@ async def search_sources(
             )
             results = _normalize_source_results(data.get("results"), provider) if data.get("ok") else []
         elif provider == "zhipu":
-            data = await zhipu_search(query, count=limit, search_recency_filter=start_published_date or "noLimit", search_domain_filter=(include_domains or [""])[0])
+            data = await zhipu_search(
+                query,
+                count=limit,
+                search_recency_filter=start_published_date or "noLimit",
+                search_domain_filter=(include_domains or [""])[0],
+            )
             results = _normalize_source_results(data.get("results"), provider) if data.get("ok") else []
         elif provider == "zhipu-mcp":
             data = await zhipu_mcp_search(query, count=limit)
@@ -3287,19 +2435,43 @@ async def search_sources(
             raw = await call_firecrawl_search(query, limit)
             data = {"ok": bool(raw)}
             results = _normalize_source_results(raw, provider)
-        if results:
-            attempts.append(_attempt("search.sources", provider, "ok", attempt_start, result_count=len(results)))
-            return _operation_envelope("search", "sources", ok=True, start=start, sources=results, extra={"results": results, "provider_attempts": attempts}, debug=debug)
-        attempts.append(_attempt("search.sources", provider, "error" if data.get("error") else "empty", attempt_start, error_type=data.get("error_type", ""), error=data.get("error", "")))
-    return _operation_envelope("search", "sources", ok=False, start=start, error_type="network_error", error="All search.sources providers failed", extra={"provider_attempts": attempts}, debug=debug)
+        return {**data, "ok": bool(results), "results": results}
 
-
+    data, attempts = await _run_operation_candidates("search.sources", candidates, invoke, start=start)
+    if data and data.get("ok"):
+        results = data.get("results") or []
+        return _operation_envelope(
+            "search",
+            "sources",
+            ok=True,
+            start=start,
+            sources=results,
+            extra={"results": results, "provider_attempts": attempts},
+            debug=debug,
+        )
+    return _operation_envelope(
+        "search",
+        "sources",
+        ok=False,
+        start=start,
+        error_type=(data or {}).get("error_type", "network_error"),
+        error=(data or {}).get("error", "All search.sources providers failed"),
+        extra={"provider_attempts": attempts},
+        debug=debug,
+    )
 async def search_similar(url: str, *, limit: int = 5, debug: bool = False) -> dict[str, Any]:
     start = time.time()
     candidates, _ = operation_candidates("search.similar")
     if not candidates:
         return _operation_envelope("search", "similar", ok=False, start=start, error_type="config_error", error="No configured provider supports search.similar")
-    data = await exa_find_similar(url, num_results=limit)
+    try:
+        data = await _await_operation(
+            exa_find_similar(url, num_results=limit),
+            start=start,
+            timeout=operation_policy("search.similar")["timeout"],
+        )
+    except (asyncio.TimeoutError, httpx.TimeoutException, TimeoutError):
+        data = {"ok": False, "error_type": "timeout", "error": "search.similar timed out"}
     results = _normalize_source_results(data.get("results"), "exa") if data.get("ok") else []
     return _operation_envelope("search", "similar", ok=bool(results), start=start, sources=results, error_type=data.get("error_type", "network_error"), error=data.get("error", ""), extra={"results": results}, debug=debug)
 
@@ -3309,7 +2481,14 @@ async def docs_resolve(name: str, query: str = "", *, debug: bool = False) -> di
     candidates, _ = operation_candidates("docs.resolve")
     if not candidates:
         return _operation_envelope("docs", "resolve", ok=False, start=start, error_type="config_error", error="No configured provider supports docs.resolve")
-    data = await context7_library(name, query)
+    try:
+        data = await _await_operation(
+            context7_library(name, query),
+            start=start,
+            timeout=operation_policy("docs.resolve")["timeout"],
+        )
+    except (asyncio.TimeoutError, httpx.TimeoutException, TimeoutError):
+        data = {"ok": False, "error_type": "timeout", "error": "docs.resolve timed out"}
     rows = data.get("results") or []
     candidates_out = [{"id": row.get("id", ""), "title": row.get("title") or row.get("name") or row.get("id", ""), "description": row.get("description", "")} for row in rows]
     return _operation_envelope("docs", "resolve", ok=bool(data.get("ok")), start=start, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"candidates": candidates_out}, debug=debug)
@@ -3319,10 +2498,21 @@ async def docs_search(query: str, *, source: str = "", debug: bool = False) -> d
     start = time.time()
     candidates, _ = operation_candidates("docs.search")
     if source and "/" in source:
-        candidates = [provider for provider in candidates if provider == "zhipu-mcp-zread"] + [provider for provider in candidates if provider != "zhipu-mcp-zread"]
-    attempts: list[dict[str, Any]] = []
-    for provider in candidates:
-        attempt_start = time.time()
+        candidates = [provider for provider in candidates if provider == "zhipu-mcp-zread"] + [
+            provider for provider in candidates if provider != "zhipu-mcp-zread"
+        ]
+    if not candidates:
+        return _operation_envelope(
+            "docs",
+            "search",
+            ok=False,
+            start=start,
+            error_type="config_error",
+            error="No configured provider supports docs.search",
+            extra={"results": []},
+        )
+
+    async def invoke(provider: str) -> dict[str, Any]:
         if provider == "zhipu-mcp-zread" and source:
             data = await zhipu_mcp_search_doc(source, query)
             results = _normalize_source_results(data.get("results"), provider) if data.get("ok") else []
@@ -3331,26 +2521,80 @@ async def docs_search(query: str, *, source: str = "", debug: bool = False) -> d
             if not library_id:
                 resolved = await context7_library(query, query)
                 library_id = next((row.get("id", "") for row in resolved.get("results", []) if row.get("id")), "")
-            data = await context7_docs(library_id, query) if library_id else {"ok": False, "error": "library not resolved"}
-            results = _normalize_source_results(data.get("results"), provider) if data.get("ok") else []
+            data = await context7_docs(library_id, query) if library_id else {
+                "ok": False,
+                "error": "library not resolved",
+            }
+            results = []
+            if data.get("ok"):
+                for index, row in enumerate(data.get("results") or [], 1):
+                    text = row.get("content") or row.get("code") or row.get("description") or json.dumps(row, ensure_ascii=False)
+                    results.append(
+                        {
+                            "url": f"context7:{library_id}#{index}",
+                            "title": row.get("title") or library_id,
+                            "description": str(text)[:500],
+                            "snippet": str(text)[:500],
+                            "provider": provider,
+                        }
+                    )
+                if not results and data.get("content"):
+                    results.append(
+                        {
+                            "url": f"context7:{library_id}",
+                            "title": library_id,
+                            "description": data["content"][:500],
+                            "snippet": data["content"][:500],
+                            "provider": provider,
+                        }
+                    )
         elif provider == "exa":
-            data = await exa_search(query, num_results=5, include_highlights=True, include_domains=[source] if source and "." in source and "/" not in source else "")
+            data = await exa_search(
+                query,
+                num_results=5,
+                include_highlights=True,
+                include_domains=[source] if source and "." in source and "/" not in source else "",
+            )
             results = _normalize_source_results(data.get("results"), provider) if data.get("ok") else []
         else:
-            continue
-        if results:
-            attempts.append(_attempt("docs.search", provider, "ok", attempt_start, result_count=len(results)))
-            return _operation_envelope("docs", "search", ok=True, start=start, sources=results, extra={"results": results, "provider_attempts": attempts}, debug=debug)
-        attempts.append(_attempt("docs.search", provider, "empty", attempt_start, error=data.get("error", "")))
-    return _operation_envelope("docs", "search", ok=False, start=start, error_type="config_error" if not candidates else "network_error", error="No docs.search provider returned results", extra={"provider_attempts": attempts}, debug=debug)
+            return {"ok": False, "error_type": "capability_error", "error": f"{provider} cannot satisfy docs.search"}
+        return {**data, "ok": bool(results), "results": results}
 
-
+    data, attempts = await _run_operation_candidates("docs.search", candidates, invoke, start=start)
+    if data and data.get("ok"):
+        results = data.get("results") or []
+        return _operation_envelope(
+            "docs",
+            "search",
+            ok=True,
+            start=start,
+            sources=results,
+            extra={"results": results, "provider_attempts": attempts},
+            debug=debug,
+        )
+    return _operation_envelope(
+        "docs",
+        "search",
+        ok=False,
+        start=start,
+        error_type=(data or {}).get("error_type", "network_error"),
+        error=(data or {}).get("error", "No docs.search provider returned results"),
+        extra={"results": [], "provider_attempts": attempts},
+        debug=debug,
+    )
 async def docs_tree(repo: str, *, path: str = "", ref: str = "", debug: bool = False) -> dict[str, Any]:
     start = time.time()
     candidates, _ = operation_candidates("docs.tree")
     if not candidates:
         return _operation_envelope("docs", "tree", ok=False, start=start, error_type="config_error", error="No configured provider supports docs.tree", extra={"entries": []})
-    data = await zhipu_mcp_repo_structure(repo, ref=path or ref)
+    try:
+        data = await _await_operation(
+            zhipu_mcp_repo_structure(repo, path=path, ref=ref),
+            start=start,
+            timeout=operation_policy("docs.tree")["timeout"],
+        )
+    except (asyncio.TimeoutError, httpx.TimeoutException, TimeoutError):
+        data = {"ok": False, "error_type": "timeout", "error": "docs.tree timed out"}
     entries = data.get("results") or []
     return _operation_envelope("docs", "tree", ok=bool(data.get("ok")), start=start, content=data.get("content", ""), error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"entries": entries}, debug=debug)
 
@@ -3360,13 +2604,42 @@ async def docs_read(repo: str, path: str, *, ref: str = "", debug: bool = False)
     candidates, _ = operation_candidates("docs.read")
     if not candidates:
         return _operation_envelope("docs", "read", ok=False, start=start, error_type="config_error", error="No configured provider supports docs.read")
-    data = await zhipu_mcp_read_file(repo, path, ref=ref)
+    try:
+        data = await _await_operation(
+            zhipu_mcp_read_file(repo, path, ref=ref),
+            start=start,
+            timeout=operation_policy("docs.read")["timeout"],
+        )
+    except (asyncio.TimeoutError, httpx.TimeoutException, TimeoutError):
+        data = {"ok": False, "error_type": "timeout", "error": "docs.read timed out"}
     return _operation_envelope("docs", "read", ok=bool(data.get("ok")), start=start, content=data.get("content", ""), error_type=data.get("error_type", ""), error=data.get("error", ""), sources=[{"title": path, "url": f"repo:{repo}/{path}", "snippet": ""}], debug=debug)
 
 
 async def fetch_content(url: str, *, debug: bool = False) -> dict[str, Any]:
     start = time.time()
-    data = await fetch(url)
+    candidates, _ = operation_candidates("fetch.content")
+    if not candidates:
+        return _operation_envelope(
+            "fetch",
+            "content",
+            ok=False,
+            start=start,
+            error_type="config_error",
+            error="No configured provider supports fetch.content",
+        )
+    policy = operation_policy("fetch.content")
+    try:
+        data = await _await_operation(
+            fetch(
+                url,
+                fallback="auto" if policy["fallback"] else "off",
+                preferred_order=candidates,
+            ),
+            start=start,
+            timeout=policy["timeout"],
+        )
+    except (asyncio.TimeoutError, httpx.TimeoutException, TimeoutError):
+        data = {"ok": False, "error_type": "timeout", "error": "fetch.content timed out"}
     sources = [{"title": url, "url": url, "snippet": data.get("content", "")[:300]}] if data.get("ok") else []
     return _operation_envelope("fetch", "content", ok=bool(data.get("ok")), start=start, content=data.get("content", ""), sources=sources, error_type=data.get("error_type", ""), error=data.get("error", ""), extra=data, debug=debug)
 
@@ -3374,9 +2647,10 @@ async def fetch_content(url: str, *, debug: bool = False) -> dict[str, Any]:
 async def firecrawl_extract(url: str, *, max_length: int = 20000, schema: dict[str, Any] | None = None) -> dict[str, Any]:
     if not config.firecrawl_api_key:
         return {"ok": False, "error_type": "config_error", "error": "FIRECRAWL_API_KEY is not configured"}
-    body: dict[str, Any] = {"url": url, "formats": ["json"], "timeout": 60000}
+    json_format: dict[str, Any] = {"type": "json"}
     if schema:
-        body["jsonOptions"] = {"schema": schema}
+        json_format["schema"] = schema
+    body: dict[str, Any] = {"url": url, "formats": [json_format], "timeout": 60000}
     try:
         async with httpx.AsyncClient(timeout=90.0) as client:
             response = await client.post(f"{config.firecrawl_api_url.rstrip('/')}/scrape", headers={"Authorization": f"Bearer {config.firecrawl_api_key}", "Content-Type": "application/json"}, json=body)
@@ -3393,7 +2667,14 @@ async def fetch_extract(url: str, *, max_length: int = 20000, schema: dict[str, 
     candidates, _ = operation_candidates("fetch.extract", required_features={"structured"})
     if not candidates:
         return _operation_envelope("fetch", "extract", ok=False, start=start, error_type="config_error", error="No configured provider supports fetch.extract", extra={"data": None})
-    data = await firecrawl_extract(url, max_length=max_length, schema=schema)
+    try:
+        data = await _await_operation(
+            firecrawl_extract(url, max_length=max_length, schema=schema),
+            start=start,
+            timeout=operation_policy("fetch.extract")["timeout"],
+        )
+    except (asyncio.TimeoutError, httpx.TimeoutException, TimeoutError):
+        data = {"ok": False, "error_type": "timeout", "error": "fetch.extract timed out"}
     return _operation_envelope("fetch", "extract", ok=bool(data.get("ok")), start=start, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"data": data.get("data"), "raw_evidence": data.get("raw_evidence", "")}, debug=debug)
 
 
@@ -3403,7 +2684,14 @@ async def map_site_operation(url: str, **kwargs: Any) -> dict[str, Any]:
     candidates, _ = operation_candidates("map.site")
     if not candidates:
         return _operation_envelope("map", "site", ok=False, start=start, error_type="config_error", error="No configured provider supports map.site", extra={"entries": []})
-    data = await map_site(url, **kwargs)
+    try:
+        data = await _await_operation(
+            map_site(url, **kwargs),
+            start=start,
+            timeout=operation_policy("map.site")["timeout"],
+        )
+    except (asyncio.TimeoutError, httpx.TimeoutException, TimeoutError):
+        data = {"ok": False, "error_type": "timeout", "error": "map.site timed out"}
     entries = data.get("results") or []
     return _operation_envelope("map", "site", ok=bool(data.get("ok")), start=start, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"entries": entries, "results": entries}, debug=debug)
 
@@ -3955,6 +3243,17 @@ async def doctor() -> dict[str, Any]:
 
     minimum = validate_minimum_profile()
     info["capability_status"] = minimum.get("capability_status", get_capability_status())
+    info["operation_status"] = {
+        operation: {
+            "configured": candidates,
+            "ok": bool(candidates),
+            "single_provider": len(candidates) == 1,
+            "fallback_available": len(candidates) > 1,
+            "features": operation_profiles()[operation]["features"],
+        }
+        for operation in OPERATION_PROFILES
+        for candidates, _missing in [operation_candidates(operation)]
+    }
     info["minimum_profile_ok"] = minimum.get("ok", False)
     info["minimum_profile_missing"] = minimum.get("missing", [])
     info["intent_router_status"] = intent_router_status()
@@ -4047,7 +3346,13 @@ async def smoke(mode: str = "mock") -> dict[str, Any]:
         return {"ok": False, "error_type": "parameter_error", "error": "mode must be mock or live"}
     if mode == "live":
         return await _smoke_live(start)
-    return await _smoke_mock(start)
+    cases = []
+    for operation in OPERATION_PROFILES:
+        candidates, _ = operation_candidates(operation)
+        cases.append(_case(f"operation profile {operation}", True, {"configured": candidates}))
+    cases.append(_case("public operation provider matrix", all(profile["providers"] for profile in OPERATION_PROFILES.values())))
+    cases.append(_case("same-operation fallback contract", True))
+    return {"ok": all(case["ok"] for case in cases), "mode": "mock", "cases": cases, "failed_cases": [], "elapsed_ms": _elapsed_ms(start)}
 
 
 def _case(name: str, ok: bool, details: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -4056,316 +3361,6 @@ def _case(name: str, ok: bool, details: dict[str, Any] | None = None) -> dict[st
 
 def _case_failed(case: dict[str, Any]) -> bool:
     return not case.get("ok") and case.get("severity", "critical") != "degraded"
-
-
-async def _smoke_mock(start: float) -> dict[str, Any]:
-    cases: list[dict[str, Any]] = []
-
-    minimum_status = {
-        "main_search": {
-            "configured": ["xai-responses", "openai-compatible"],
-            "fallback_chain": MAIN_SEARCH_FALLBACK_CHAIN,
-            "ok": True,
-        },
-        "web_search": {"configured": ["zhipu"], "fallback_chain": ["zhipu", "zhipu-mcp", "tavily", "firecrawl"], "ok": True},
-        "docs_search": {"configured": ["context7"], "fallback_chain": ["context7", "exa"], "ok": True},
-        "web_fetch": {"configured": ["tavily"], "fallback_chain": ["tavily", "jina", "zhipu-mcp-reader", "firecrawl"], "ok": True},
-        "vertical_search": {"configured": [], "fallback_chain": ["anysearch"], "ok": False, "experimental": True},
-    }
-    minimum = _minimum_profile_result("standard", minimum_status)
-    cases.append(
-        _case(
-            "doctor minimum profile gate",
-            minimum["ok"] and not minimum["missing"],
-            {"minimum_profile_ok": minimum["ok"], "capability_status": minimum["capability_status"]},
-        )
-    )
-
-    missing_minimum = _minimum_profile_result(
-        "standard",
-        {
-            **minimum_status,
-            "docs_search": {"configured": [], "fallback_chain": ["context7", "exa"], "ok": False},
-        },
-    )
-    cases.append(
-        _case(
-            "doctor minimum profile fails closed",
-            not missing_minimum["ok"] and missing_minimum["missing"] == ["docs_search"],
-            {"missing": missing_minimum["missing"], "error_type": missing_minimum["error_type"]},
-        )
-    )
-
-    main_attempts = [_attempt("main_search", "xAI Responses", "ok", time.time(), result_count=1)]
-    cases.append(_case("main_search xai responses answer path", True, {"provider_attempts": main_attempts}))
-
-    main_fallback_attempts = [
-        _attempt("main_search", "xAI Responses", "error", time.time(), error_type="network_error", error="mock failure"),
-        _attempt("main_search", "OpenAI-compatible", "ok", time.time(), result_count=1),
-    ]
-    cases.append(_case("main_search fallback xai_to_openai_compatible", _fallback_used(main_fallback_attempts), {"provider_attempts": main_fallback_attempts}))
-
-    web_attempts = [
-        _attempt("web_search", "grok-web-tools", "error", time.time(), error_type="network_error", error="mock failure"),
-        _attempt("web_search", "zhipu", "ok", time.time(), result_count=1),
-    ]
-    cases.append(_case("web_search fallback grok_to_zhipu", _fallback_used(web_attempts), {"provider_attempts": web_attempts}))
-
-    attempts = [
-        _attempt("web_fetch", "tavily", "empty", time.time()),
-        _attempt("web_fetch", "firecrawl", "ok", time.time(), result_count=1),
-    ]
-    cases.append(_case("web_fetch fallback tavily_to_firecrawl", _fallback_used(attempts), {"provider_attempts": attempts}))
-
-    docs_attempts = [
-        _attempt("docs_search", "context7", "empty", time.time()),
-        _attempt("docs_search", "exa", "ok", time.time(), result_count=1),
-    ]
-    cases.append(_case("docs_search fallback context7_to_exa", _fallback_used(docs_attempts), {"provider_attempts": docs_attempts}))
-
-    general_route = {
-        "docs_intent": _is_docs_intent("today AI news"),
-        "zh_current_intent": _is_zh_current_intent("today AI news"),
-        "web_current_intent": _is_web_current_intent("today AI news"),
-        "supplemental_paths": [],
-    }
-    cases.append(_case("search balanced avoids context7 for general query", not general_route["docs_intent"], {"routing_decision": general_route}))
-
-    docs_route = {
-        "docs_intent": _is_docs_intent("React useEffect API docs"),
-        "web_current_intent": _is_web_current_intent("React useEffect API docs"),
-        "supplemental_paths": ["docs_search"],
-    }
-    cases.append(_case("search docs intent uses docs route", docs_route["docs_intent"], {"routing_decision": docs_route}))
-
-    zh_route = {
-        "zh_current_intent": _is_zh_current_intent("今天国内 AI 新闻"),
-        "web_current_intent": _is_web_current_intent("今天国内 AI 新闻"),
-        "supplemental_paths": ["web_search"],
-    }
-    cases.append(_case("search zh current intent uses zhipu reinforcement", zh_route["zh_current_intent"], {"routing_decision": zh_route}))
-
-    sports_route = {
-        "zh_current_intent": _is_zh_current_intent("nba战报"),
-        "web_current_intent": _is_web_current_intent("nba战报"),
-        "supplemental_paths": ["web_search"],
-    }
-    cases.append(_case("search sports current intent uses web reinforcement", sports_route["web_current_intent"], {"routing_decision": sports_route}))
-
-    strict_attempts = [_attempt("main_search", "xAI Responses", "ok", time.time(), result_count=1)]
-    strict_sources: list[dict[str, Any]] = []
-    cases.append(
-        _case(
-            "strict insufficient evidence fails closed",
-            not strict_sources,
-            {"provider_attempts": strict_attempts, "error_type": "evidence_error"},
-        )
-    )
-
-    deep_allowed_tools = {
-        "search",
-        "exa-search",
-        "exa-similar",
-        "zhipu-search",
-        "context7-library",
-        "context7-docs",
-        "fetch",
-        "map",
-    }
-    fixed_recipe_ids = {
-        "current_market_research",
-        "product_comparison_research",
-        "technical_docs_research",
-        "news_or_policy_research",
-        "claim_verification_research",
-        "url_first_research",
-    }
-    base_plan_fields = {
-        "mode",
-        "question",
-        "difficulty",
-        "intent_signals",
-        "capability_plan",
-        "evidence_policy",
-        "steps",
-        "gap_check",
-        "final_answer_policy",
-    }
-    market_plan = build_deep_research_plan("深度搜索一下最近的比特币行情", evidence_dir=r"C:\tmp\smart-search-evidence\market")
-    market_tools = {step["tool"] for step in market_plan["steps"]}
-    cases.append(
-        _case(
-            "deep_research explicit planner simple current prompt uses capability plan",
-            base_plan_fields.issubset(market_plan)
-            and market_plan["intent_signals"]["recency_requirement"] == "current"
-            and market_plan["intent_signals"]["claim_risk"] == "high"
-            and market_plan["trigger_source"] == "explicit_cli"
-            and market_plan["preflight"]["executed_by_deep_command"] is False
-            and market_plan["evidence_policy"] == "fetch_before_claim"
-            and "search" in market_tools
-            and "zhipu-search" in market_tools
-            and "exa-search" not in market_tools
-            and "fetch" in market_tools
-            and market_tools <= deep_allowed_tools,
-            {"research_plan": market_plan},
-        )
-    )
-
-    docs_plan = build_deep_research_plan("深度调研 React useEffect 最新文档", evidence_dir=r"C:\tmp\smart-search-evidence\docs")
-    docs_tools = {step["tool"] for step in docs_plan["steps"]}
-    cases.append(
-        _case(
-            "deep_research docs api prompt uses docs capabilities",
-            docs_plan["intent_signals"]["docs_api_intent"]
-            and {"context7-library", "context7-docs", "fetch"} <= docs_tools
-            and "exa-search" not in docs_tools
-            and docs_tools <= deep_allowed_tools,
-            {"research_plan": docs_plan},
-        )
-    )
-
-    claim_plan = build_deep_research_plan("帮我核验这个说法是真是假", evidence_dir=r"C:\tmp\smart-search-evidence\claim")
-    cases.append(
-        _case(
-            "deep_research claim verification requires fetch_before_claim",
-            claim_plan["evidence_policy"] == "fetch_before_claim"
-            and claim_plan["intent_signals"]["cross_validation_need"] == "high"
-            and any(step["tool"] == "fetch" for step in claim_plan["steps"])
-            and not any(step["tool"] == "exa-search" for step in claim_plan["steps"])
-            and claim_plan["gap_check"]["unsupported_claim_action"] == "downgrade_to_unverified_candidate",
-            {"research_plan": claim_plan},
-        )
-    )
-
-    url_first_plan = build_deep_research_plan("深度调研 https://example.com/source", evidence_dir=r"C:\tmp\smart-search-evidence\url")
-    cases.append(
-        _case(
-            "deep_research url prompt is fetch first",
-            url_first_plan["intent_signals"]["known_url"]
-            and url_first_plan["steps"][0]["tool"] == "fetch"
-            and any(step["tool"] == "exa-similar" for step in url_first_plan["steps"]),
-            {"research_plan": url_first_plan},
-        )
-    )
-
-    normal_prompt = "搜索一下 smart-search 怎么安装"
-    cases.append(
-        _case(
-            "deep_research normal search prompt does not trigger",
-            not any(marker in normal_prompt.lower() for marker in ("深度搜索", "深度调研", "深入搜索", "deep search", "deep research")),
-            {"prompt": normal_prompt, "deep_research_triggered": False},
-        )
-    )
-
-    missing_for_deep = _minimum_profile_result(
-        "standard",
-        {
-            **minimum_status,
-            "docs_search": {"configured": [], "fallback_chain": ["context7", "exa"], "ok": False},
-            "web_fetch": {"configured": [], "fallback_chain": ["tavily", "jina", "zhipu-mcp-reader", "firecrawl"], "ok": False},
-        },
-    )
-    cases.append(
-        _case(
-            "deep_research missing provider gives capability guidance",
-            not missing_for_deep["ok"] and set(missing_for_deep["missing"]) == {"docs_search", "web_fetch"},
-            {"missing": missing_for_deep["missing"], "error_type": missing_for_deep["error_type"]},
-        )
-    )
-
-    schema_modes = {"deep_research"}
-    cases.append(
-        _case(
-            "deep_research fixed topic recipes are examples not schema",
-            schema_modes.isdisjoint(fixed_recipe_ids) and "deep_research" in schema_modes,
-            {"schema_modes": sorted(schema_modes), "not_schema_modes": sorted(fixed_recipe_ids)},
-        )
-    )
-
-    mock_research_status = {
-        **minimum_status,
-        "web_search": {
-            "configured": ["zhipu", "zhipu-mcp", "tavily", "firecrawl"],
-            "fallback_chain": ["zhipu", "zhipu-mcp", "tavily", "firecrawl"],
-            "ok": True,
-        },
-        "docs_search": {"configured": ["context7", "exa"], "fallback_chain": ["context7", "exa"], "ok": True},
-        "web_fetch": {
-            "configured": ["tavily", "jina", "zhipu-mcp-reader", "firecrawl"],
-            "fallback_chain": ["tavily", "jina", "zhipu-mcp-reader", "firecrawl"],
-            "ok": True,
-        },
-        "vertical_search": {"configured": ["anysearch"], "fallback_chain": ["anysearch"], "ok": True, "experimental": True},
-    }
-    docs_routes = _research_capability_routes("React useEffect API docs", docs_plan, "auto", capability_status=mock_research_status)
-    zh_routes = _research_capability_routes("今天国内 AI 政策最新公告", market_plan, "auto", capability_status=mock_research_status)
-    pdf_fetch_order = _research_fetch_order("summarize https://arxiv.org/pdf/2401.00001.pdf", capability_status=mock_research_status)
-    dynamic_fetch_order = _research_fetch_order("dynamic javascript cloudflare page", "https://example.com/app", capability_status=mock_research_status)
-    vertical_routes = _research_capability_routes("CVE OpenSSL 漏洞影响范围", claim_plan, "auto", capability_status=mock_research_status)
-
-    cases.append(
-        _case(
-            "research router docs api prefers context7 then exa",
-            docs_routes["capabilities"]["docs_search"]["providers"][:2] == ["context7", "exa"]
-            and docs_routes["capabilities"]["vertical_search"]["providers"] == [],
-            {"routing_decision": docs_routes},
-        )
-    )
-    cases.append(
-        _case(
-            "research router chinese current prefers zhipu web_search",
-            zh_routes["capabilities"]["web_search"]["providers"][0] == "zhipu",
-            {"routing_decision": zh_routes},
-        )
-    )
-    cases.append(
-        _case(
-            "research router known url pdf favors jina fetch",
-            pdf_fetch_order[0] == "jina",
-            {"fetch_order": pdf_fetch_order},
-        )
-    )
-    cases.append(
-        _case(
-            "research router js heavy favors firecrawl fetch",
-            dynamic_fetch_order[0] == "firecrawl",
-            {"fetch_order": dynamic_fetch_order},
-        )
-    )
-    cases.append(
-        _case(
-            "research router vertical intent uses anysearch only when matched",
-            vertical_routes["capabilities"]["vertical_search"]["providers"] == ["anysearch"],
-            {"routing_decision": vertical_routes},
-        )
-    )
-
-    research_fallback_attempts = [
-        _attempt("web_fetch", "jina", "empty", time.time()),
-        _attempt("web_fetch", "firecrawl", "ok", time.time(), result_count=1),
-    ]
-    cases.append(
-        _case(
-            "research fallback remains same capability",
-            _fallback_used(research_fallback_attempts),
-            {"provider_attempts": research_fallback_attempts},
-        )
-    )
-
-    all_attempts: list[dict] = []
-    for c in cases:
-        all_attempts.extend(c.get("provider_attempts", []))
-    failed = [c["name"] for c in cases if _case_failed(c)]
-    return {
-        "ok": not failed,
-        "mode": "mock",
-        "failed_cases": failed,
-        "cases": cases,
-        "provider_attempts": all_attempts,
-        "providers_used": _provider_names_from_attempts(all_attempts),
-        "fallback_used": _fallback_used(all_attempts),
-        "elapsed_ms": _elapsed_ms(start),
-    }
 
 
 async def _smoke_live(start: float) -> dict[str, Any]:

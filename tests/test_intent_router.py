@@ -198,24 +198,3 @@ async def test_classifier_can_add_capability_when_semantic_is_ambiguous(monkeypa
     assert result["required_capabilities"] == ["docs_search"]
     assert any("embeddings ambiguous" in reason for reason in result["reasons"])
     assert any("classifier: docs intent" in reason for reason in result["reasons"])
-
-
-def test_deep_research_plan_uses_offline_rules_even_when_remote_router_configured(monkeypatch):
-    monkeypatch.setenv("SMART_SEARCH_INTENT_ROUTER", "hybrid")
-    monkeypatch.setenv("INTENT_EMBEDDING_API_URL", "https://embed.example.com/embeddings")
-    monkeypatch.setenv("INTENT_EMBEDDING_API_KEY", "embed-secret")
-    monkeypatch.setenv("INTENT_EMBEDDING_MODEL", "embed-model")
-    monkeypatch.setenv("INTENT_CLASSIFIER_API_URL", "https://classifier.example.com/chat/completions")
-    monkeypatch.setenv("INTENT_CLASSIFIER_API_KEY", "classifier-secret")
-    monkeypatch.setenv("INTENT_CLASSIFIER_MODEL", "intent-mini")
-
-    async def should_not_run_remote(*args, **kwargs):
-        raise AssertionError("deep planner must not call remote intent router components")
-
-    monkeypatch.setattr(IntentRouter, "_semantic_route", should_not_run_remote)
-    monkeypatch.setattr(IntentRouter, "_classifier_route", should_not_run_remote)
-
-    result = service.build_deep_research_plan("React useEffect API docs")
-
-    assert result["ok"] is True
-    assert result["intent_signals"]["docs_api_intent"] is True

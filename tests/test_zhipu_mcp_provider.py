@@ -156,6 +156,7 @@ async def test_zhipu_mcp_zread_tools_send_expected_arguments(monkeypatch):
     assert FakeZhipuMCPClient.calls[2]["json"]["params"]["arguments"] == {
         "repo_name": "owner/repo",
         "file_path": "README.md",
+        "ref": "main",
     }
 
 
