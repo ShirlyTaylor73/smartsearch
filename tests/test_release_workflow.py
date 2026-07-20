@@ -5,13 +5,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 RESOLVER = ROOT / "npm" / "scripts" / "resolve-prerelease-version.js"
 WORKFLOW = ROOT / ".github" / "workflows" / "publish-npm.yml"
+PACKAGE_NAME = "@shirlytaylor73/smart-search"
 
 
 def read_reference_tree(skill_dir: Path) -> str:
     return "\n".join(
-        p.read_text(encoding="utf-8")
-        for p in sorted((skill_dir / "references").rglob("*"))
-        if p.is_file() and p.suffix == ".md"
+        path.read_text(encoding="utf-8")
+        for path in sorted((skill_dir / "references").rglob("*"))
+        if path.is_file() and path.suffix == ".md"
     )
 
 
@@ -21,7 +22,7 @@ def run_resolver(base_version: str, versions: list[str]) -> str:
             "node",
             str(RESOLVER),
             "--package",
-            "@konbakuyomu/smart-search",
+            PACKAGE_NAME,
             "--base",
             base_version,
             "--id",
@@ -65,30 +66,42 @@ def test_resolver_starts_at_beta_one_without_prior_versions():
     assert run_resolver("0.2.0", []) == "0.2.0-beta.1"
 
 
-def test_publish_workflow_uses_beta_lane_and_prerelease_guardrails():
+def test_package_metadata_belongs_to_fork_and_uses_breaking_release_version():
+    package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+    package_lock = json.loads((ROOT / "package-lock.json").read_text(encoding="utf-8"))
+
+    assert package["name"] == PACKAGE_NAME
+    assert package["version"] == "0.2.0"
+    assert package["homepage"] == "https://github.com/ShirlyTaylor73/smartsearch#readme"
+    assert package["repository"]["url"] == "git+https://github.com/ShirlyTaylor73/smartsearch.git"
+    assert package["bugs"]["url"] == "https://github.com/ShirlyTaylor73/smartsearch/issues"
+    assert package_lock["name"] == PACKAGE_NAME
+    assert package_lock["version"] == "0.2.0"
+    assert package_lock["packages"][""]["name"] == PACKAGE_NAME
+
+
+def test_publish_workflow_uses_manual_beta_tag_stable_and_token_auth():
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
     assert "workflow_dispatch:" in workflow
+    assert "branches:" not in workflow
+    assert 'tags:\n      - "v*"' in workflow
     assert "github.event.inputs.target_ref" in workflow
     assert "github.event.inputs.version" in workflow
     assert "github.event.inputs.npm_tag" in workflow
-    assert "resolve-prerelease-version.js" in workflow
-    assert "Detect stable release bump commit" in workflow
-    assert "chore\\(release\\)" in workflow
-    assert "stable-bump.outputs.skip != 'true'" in workflow
-    assert "-dev.${GITHUB_RUN_NUMBER}" not in workflow
-    assert "&& inputs." not in workflow
-    assert "|| inputs." not in workflow
-    assert "tag=\"next\"" in workflow
-    assert "tag=\"latest\"" in workflow
+    assert 'tag="next"' in workflow
+    assert 'tag="latest"' in workflow
     assert "Refusing to publish prerelease version" in workflow
-    assert "notes_file=\".github/releases/v${version}.md\"" in workflow
-    assert "notes_footer=\"$(printf" in workflow
+    assert "NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}" in workflow
+    assert "npm publish --access public --provenance" in workflow
+    assert 'expected_package="@shirlytaylor73/smart-search"' in workflow
+    assert 'notes_file=".github/releases/v${version}.md"' in workflow
+    assert 'notes_footer="$(printf' in workflow
     assert "gh release create" in workflow
     assert "--prerelease" in workflow
 
 
-def test_release_docs_explain_beta_lane_and_npm_immutability():
+def test_release_docs_explain_new_package_and_migration():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     readme_zh = (ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
     public_contract = read_reference_tree(ROOT / "skills" / "smart-search-cli")
@@ -97,55 +110,40 @@ def test_release_docs_explain_beta_lane_and_npm_immutability():
     )
 
     required_markers = [
-        "Release lanes",
-        "<package.json version>-beta.N",
-        "dist-tag `next`",
-        "0.1.10-beta.3",
-        "chore(release): bump version to X.Y.Z",
-        ".github/releases/vX.Y.Z.md",
-        "vX.Y.Z",
+        "@shirlytaylor73/smart-search@next",
+        "npm wrapper",
+        "Python",
+        "npm uninstall -g @konbakuyomu/smart-search",
+        "npm install -g @shirlytaylor73/smart-search@next",
+        "configuration directory does not change",
         "workflow_dispatch",
-        "target_ref",
-        "npm versions are immutable",
-        "cannot be renamed in place",
-        "Release closeout checklist",
-        "create_github_release=false",
-        "gh release create vX.Y.Z-beta.N",
-        "npm `E409`",
-        "machine-readable gap check",
-        "mise use -g",
-        "non-ASCII JSON",
-        "ConvertFrom-Json",
+        "v0.2.0",
+        "NPM_TOKEN",
     ]
     for marker in required_markers:
         assert marker in readme
+
     zh_required_markers = [
-        "发布通道",
-        "<package.json version>-beta.N",
-        "npm `next`",
-        "0.1.10-beta.3",
-        ".github/releases/vX.Y.Z.md",
-        "npm 版本不可变",
-        "gh release list",
-        "npm `E409`",
-        "smart-search regression",
-        "smart-search smoke --mock --format json",
-        "ConvertFrom-Json",
+        "@shirlytaylor73/smart-search@next",
+        "npm 包装器",
+        "Python",
+        "npm uninstall -g @konbakuyomu/smart-search",
+        "npm install -g @shirlytaylor73/smart-search@next",
+        "配置目录不会变化",
+        "workflow_dispatch",
+        "v0.2.0",
+        "NPM_TOKEN",
     ]
     for marker in zh_required_markers:
         assert marker in readme_zh
+
     contract_markers = [
         "Release Lanes",
-        "<package.json version>-beta.N",
-        "chore(release): bump version to X.Y.Z",
-        ".github/releases/vX.Y.Z.md",
+        "@shirlytaylor73/smart-search",
+        "workflow_dispatch",
+        "v0.2.0",
         "npm versions are immutable",
-        "Release Closeout Lessons",
-        "GitHub release creation fails",
-        "npm `E409`",
-        "diff-style gap check",
-        "smart-search smoke --mock --format json",
-        "Windows npm/mise wrapper is emitting UTF-8 JSON",
+        "NPM_TOKEN",
     ]
     for marker in contract_markers:
         assert marker in public_contract
@@ -153,16 +151,18 @@ def test_release_docs_explain_beta_lane_and_npm_immutability():
 
 
 def test_current_stable_release_notes_describe_user_visible_changes():
-    notes = (ROOT / ".github" / "releases" / "v0.1.14.md").read_text(encoding="utf-8")
+    notes = (ROOT / ".github" / "releases" / "v0.2.0.md").read_text(encoding="utf-8")
 
     required_markers = [
-        "GitHub issue #7",
-        "smart-search skills status",
-        "smart-search skills update",
-        "smart-search diagnose openai-compatible",
-        "Context7",
-        "Exa",
-        "Validation",
+        "@shirlytaylor73/smart-search",
+        "0.2.0",
+        "search answer",
+        "docs search",
+        "fetch content",
+        "map site",
+        "AnySearch",
+        "Deep Research",
     ]
     for marker in required_markers:
         assert marker in notes
+
