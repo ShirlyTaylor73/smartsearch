@@ -23,6 +23,13 @@
 
 当资料冲突时，应指出冲突并以更高优先级来源为准。外部技术资料应优先采用项目或依赖的最新官方文档，并记录关键版本或链接。
 
+### 智谱 Provider 官方参考
+
+- 智谱 Coding Plan MCP 官方文档：<https://docs.bigmodel.cn/cn/coding-plan/mcp>
+- 智谱工具 API 与 API Key 官方文档：<https://docs.bigmodel.cn/api-reference/%E5%B7%A5%E5%85%B7-api/>
+
+涉及 `ZHIPU_API_KEY` 对应的智谱 REST provider，或 `ZHIPU_MCP_API_KEY` 对应的 MCP Search、MCP Reader、MCP zread provider 的新增、修改、排查和兼容性判断时，必须先使用 Tavily 读取并参考上述对应官方文档的最新内容，再确定 endpoint、认证方式、工具名称、请求参数、响应结构、错误语义和能力边界。不得仅凭模型记忆、历史实现或第三方资料修改相关 provider；实现记录或最终反馈中应注明实际参考的官方文档链接。若两份文档涉及共享认证或能力边界，应同时交叉核对。
+
 ## 仓库结构
 
 - `src/smart_search/`：Python CLI、服务、配置、路由及 provider 实现。
