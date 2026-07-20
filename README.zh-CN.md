@@ -4,15 +4,25 @@
 
 ## 安装与初始化
 
+`smart-search` 的实际实现是 Python CLI。npm 包只是 npm 包装器：它会创建
+隔离的 Python runtime，并安装随 npm 包发布的 Python 源码。
+
+0.2.0 预览阶段从 npm `next` 安装当前 fork：
+
 ```bash
-npm install -g @konbakuyomu/smart-search
+npm install -g @shirlytaylor73/smart-search@next
 smart-search setup
 smart-search doctor --format json
 ```
 
-也可以使用 Python 包：
+`v0.2.0` 发布后，稳定版使用
+`@shirlytaylor73/smart-search@latest`。
+
+也可以直接从源码安装 Python 包：
 
 ```bash
+uv tool install --editable .
+# 或
 pip install -e .
 smart-search --version
 ```
@@ -118,6 +128,23 @@ smart-search diagnose smoke --mode mock
 
 ## 迁移
 
+### npm 包归属
+
+当前仓库发布 `@shirlytaylor73/smart-search`。上游
+`@konbakuyomu/smart-search` 是另一个独立 npm 包，不会收到当前 fork 的
+更新。两个包都会安装同名 `smart-search` 命令，因此必须先卸载旧包：
+
+```bash
+npm uninstall -g @konbakuyomu/smart-search
+npm install -g @shirlytaylor73/smart-search@next
+smart-search -v
+smart-search diagnose smoke --mode mock
+```
+
+配置目录不会变化，现有 API key 和 `SMART_SEARCH_OPERATION_CONFIG` 无需迁移。
+
+### CLI 契约
+
 旧 provider 命令在兼容期内隐藏并映射到新 operation，例如 `exa-search` → `search sources`、`exa-similar` → `search similar`、`context7-library` → `docs resolve`、旧 `fetch` → `fetch content`、旧 `map` → `map site`。
 
 实验性垂直 provider 与 Deep Research CLI 已移除。研究分解、证据对比和最终写作由上层 Agent 负责；论文与垂直检索后续通过独立 paper-search 扩展。
@@ -133,17 +160,17 @@ npm test
 
 ## 发布通道
 
-稳定版使用 Git tag 和 npm `latest`。测试版使用
-`<package.json version>-beta.N` 并发布到 npm `next`；例如前两个测试版
-之后可以发布 `0.1.10-beta.3`。稳定版 GitHub Release 的正文来自
-`.github/releases/vX.Y.Z.md`。
+beta 通过 `workflow_dispatch` 手动发布，需要指定 `target_ref`、类似
+`0.2.0-beta.1` 的准确版本和 npm `next`。稳定版通过类似 `v0.2.0`
+的 Git tag 发布到 npm `latest`。GitHub Actions 使用仓库 Secret
+`NPM_TOKEN` 完成 npm 认证，并保留 provenance。
 
 npm 版本不可变，已发布版本不能原地改名，只能用新的 beta 版本替代。
 
 发布收尾检查：
 
-1. 先运行 `npm view` 并通过
-   `gh release list --repo konbakuyomu/smartsearch --limit 100` 核对现状。
+1. 先运行 `npm view @shirlytaylor73/smart-search` 并通过
+   `gh release list --repo ShirlyTaylor73/smartsearch --limit 100` 核对现状。
 2. 遇到 npm `E409` 时，先确认版本是否已经存在，再串行重试。
 3. 兼容窗口内可运行旧入口 `smart-search regression` 和
    `smart-search smoke --mock --format json` 验证迁移提示；新版入口分别是

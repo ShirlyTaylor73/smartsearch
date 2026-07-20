@@ -4,15 +4,26 @@
 
 ## Install and setup
 
+`smart-search` is implemented in Python. The npm package is an npm wrapper
+that creates an isolated Python runtime and installs the bundled Python CLI.
+
+During the 0.2.0 preview, install the fork-owned package from npm dist-tag
+`next`:
+
 ```bash
-npm install -g @konbakuyomu/smart-search
+npm install -g @shirlytaylor73/smart-search@next
 smart-search setup
 smart-search doctor --format json
 ```
 
-Python development installation:
+After `v0.2.0` is published, stable installations can use
+`@shirlytaylor73/smart-search@latest`.
+
+Python source installation:
 
 ```bash
+uv tool install --editable .
+# or
 pip install -e .
 smart-search --version
 ```
@@ -118,6 +129,25 @@ The public JSON envelope contains `ok`, `capability`, `operation`, `content`, `s
 
 ## Migration
 
+### npm package ownership
+
+This repository publishes `@shirlytaylor73/smart-search`. The upstream
+`@konbakuyomu/smart-search` package is a separate package and does not
+receive updates from this fork. Both packages expose the same
+`smart-search` executable, so uninstall the upstream package first:
+
+```bash
+npm uninstall -g @konbakuyomu/smart-search
+npm install -g @shirlytaylor73/smart-search@next
+smart-search -v
+smart-search diagnose smoke --mode mock
+```
+
+The configuration directory does not change, so existing credentials and
+`SMART_SEARCH_OPERATION_CONFIG` values remain available.
+
+### CLI contract
+
 Legacy provider commands are hidden during the compatibility window and map to operations, for example `exa-search` → `search sources`, `exa-similar` → `search similar`, `context7-library` → `docs resolve`, legacy `fetch` → `fetch content`, and legacy `map` → `map site`.
 
 The experimental vertical provider and Deep Research CLI were removed. The calling agent owns research decomposition, evidence comparison, and final writing; paper and vertical retrieval will be extended separately through paper-search.
@@ -133,16 +163,14 @@ npm test
 
 ## Release lanes
 
-Stable releases use Git tags and npm `latest`. Test releases use
-`<package.json version>-beta.N` under npm dist-tag `next`; for example,
-after two test builds the next release can be `0.1.10-beta.3`. The
-`chore(release): bump version to X.Y.Z` commit is skipped by the beta lane,
-while the matching `vX.Y.Z` tag publishes the stable build. Stable release
-notes come from `.github/releases/vX.Y.Z.md`.
+Beta releases are started manually through `workflow_dispatch` with an
+explicit `target_ref`, version such as `0.2.0-beta.1`, and npm dist-tag
+`next`. Stable releases use a matching tag such as `v0.2.0` and publish
+to npm dist-tag `latest`. GitHub Actions reads the repository secret
+`NPM_TOKEN` and publishes with provenance.
 
-Historical backfills use `workflow_dispatch` with an explicit `target_ref`.
-npm versions are immutable and cannot be renamed in place, so an old test
-build must be superseded by a new beta version.
+npm versions are immutable and cannot be renamed in place. Failed beta builds
+must be superseded by a new `0.2.0-beta.N` version.
 
 Release closeout checklist:
 
@@ -155,6 +183,6 @@ Release closeout checklist:
 4. Run a machine-readable gap check between expected npm beta versions and
    GitHub prereleases.
 5. Install the selected build with
-   `mise use -g "npm:@konbakuyomu/smart-search@0.1.10-beta.3" -y --pin`,
+   `mise use -g "npm:@shirlytaylor73/smart-search@0.2.0-beta.1" -y --pin`,
    then verify version, regression, smoke, and a non-ASCII JSON pipe through
    PowerShell `ConvertFrom-Json`.
