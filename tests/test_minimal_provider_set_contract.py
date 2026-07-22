@@ -1,5 +1,6 @@
 import json
 
+import httpx
 import pytest
 
 from smart_search import cli, service
@@ -202,6 +203,78 @@ async def test_search_sources_does_not_fallback_after_exa_failure(monkeypatch):
     assert result["ok"] is False
     assert result["error"] == "exa failed"
     assert "provider_attempts" not in result
+
+
+@pytest.mark.asyncio
+async def test_exa_search_uses_native_type_and_public_filters(monkeypatch):
+    calls = []
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, endpoint, headers, json):
+            calls.append(json)
+            return httpx.Response(200, json={"results": []}, request=httpx.Request("POST", endpoint))
+
+    monkeypatch.setattr("smart_search.providers.exa.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setenv("EXA_API_KEY", "exa-key")
+    monkeypatch.setenv("EXA_SEARCH_TYPE", "deep-lite")
+    await service.search_sources(
+        "q",
+        limit=7,
+        start_published_date="2026-01-01T00:00:00.000Z",
+        include_domains=["example.com"],
+        exclude_domains=["spam.example"],
+        category="research paper",
+        include_text=True,
+        include_highlights=True,
+    )
+    assert calls == [
+        {
+            "query": "q",
+            "numResults": 7,
+            "type": "deep-lite",
+            "contents": {"text": True, "highlights": True},
+            "startPublishedDate": "2026-01-01T00:00:00.000Z",
+            "includeDomains": ["example.com"],
+            "excludeDomains": ["spam.example"],
+            "category": "research paper",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_search_answer_only_uses_selected_grok_transport(monkeypatch):
+    calls = []
+
+    class FakeXAI:
+        def __init__(self, *args, **kwargs):
+            calls.append("xai-init")
+
+        async def search(self, query):
+            calls.append("xai-search")
+            return "answer"
+
+    class ForbiddenOpenAI:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("OpenAI-compatible fallback attempted")
+
+    monkeypatch.setenv("SMART_SEARCH_GROK_TRANSPORT", "xai-responses")
+    monkeypatch.setenv("XAI_API_KEY", "xai-key")
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_URL", "https://relay.example/v1")
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "relay-key")
+    monkeypatch.setattr(service, "XAIResponsesSearchProvider", FakeXAI)
+    monkeypatch.setattr(service, "OpenAICompatibleSearchProvider", ForbiddenOpenAI)
+    result = await service.search_answer("q")
+    assert result["ok"] is True
+    assert calls == ["xai-init", "xai-search"]
 
 
 @pytest.mark.asyncio

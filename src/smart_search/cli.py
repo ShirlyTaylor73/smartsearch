@@ -2282,12 +2282,11 @@ def _run_advanced_setup_prompts(values: dict[str, str], current: dict[str, str],
 async def _run_async(args: argparse.Namespace) -> int:
     if args.command == "search":
         if args.operation == "answer":
-            data = await service.search_answer(args.query, stream=args.stream, timeout_seconds=args.timeout, debug=args.debug)
-        elif args.operation == "sources":
+            data = await service.search_answer(args.query, timeout_seconds=args.timeout, debug=args.debug)
+        else:
             data = await service.search_sources(
                 args.query,
                 limit=args.limit,
-                mode=args.mode,
                 start_published_date=args.start_published_date,
                 include_domains=args.include_domains,
                 exclude_domains=args.exclude_domains,
@@ -2296,8 +2295,6 @@ async def _run_async(args: argparse.Namespace) -> int:
                 include_highlights=args.include_highlights,
                 debug=args.debug,
             )
-        else:
-            data = await service.search_similar(args.url, limit=args.limit, debug=args.debug)
         return _print_result("search", data, args.format, args.output)
     if args.command == "docs":
         if args.operation == "resolve":
@@ -2305,9 +2302,9 @@ async def _run_async(args: argparse.Namespace) -> int:
         elif args.operation == "search":
             data = await service.docs_search(args.query, source=args.source, debug=args.debug)
         elif args.operation == "tree":
-            data = await service.docs_tree(args.repo, path=args.path, ref=args.ref, debug=args.debug)
+            data = await service.docs_tree(args.repo, path=args.path, debug=args.debug)
         else:
-            data = await service.docs_read(args.repo, args.path, ref=args.ref, debug=args.debug)
+            data = await service.docs_read(args.repo, args.path, debug=args.debug)
         return _print_result("docs", data, args.format, args.output)
     if args.command == "route":
         data = await service.route(args.query, validation=args.validation, mode=args.router_mode)
@@ -2333,46 +2330,6 @@ async def _run_async(args: argparse.Namespace) -> int:
             debug=args.debug,
         )
         return _print_result("map", data, args.format, args.output)
-    if args.command == "exa-search":
-        data = await service.search_sources(
-            args.query,
-            limit=args.num_results,
-            mode="semantic" if args.search_type == "neural" else args.search_type,
-            include_text=args.include_text,
-            include_highlights=args.include_highlights,
-            start_published_date=args.start_published_date,
-            include_domains=args.include_domains,
-            exclude_domains=args.exclude_domains,
-            category=args.category,
-        )
-        return _print_result("search", data, args.format, args.output)
-    if args.command == "exa-similar":
-        data = await service.search_similar(args.url, limit=args.num_results)
-        return _print_result("search", data, args.format, args.output)
-    if args.command == "zhipu-search":
-        data = await service.search_sources(args.query, limit=args.count, start_published_date=args.search_recency_filter if args.search_recency_filter != "noLimit" else "", include_domains=[args.search_domain_filter] if args.search_domain_filter else [])
-        return _print_result("search", data, args.format, args.output)
-    if args.command == "zhipu-mcp-search":
-        data = await service.search_sources(args.query, limit=args.count)
-        return _print_result("search", data, args.format, args.output)
-    if args.command == "zhipu-mcp-reader":
-        data = await service.fetch_content(args.url)
-        return _print_result("fetch", data, args.format, args.output)
-    if args.command == "zhipu-mcp-search-doc":
-        data = await service.docs_search(args.query, source=args.repo)
-        return _print_result("docs", data, args.format, args.output)
-    if args.command == "zhipu-mcp-repo-structure":
-        data = await service.docs_tree(args.repo, ref=args.ref)
-        return _print_result("docs", data, args.format, args.output)
-    if args.command == "zhipu-mcp-read-file":
-        data = await service.docs_read(args.repo, args.path, ref=args.ref)
-        return _print_result("docs", data, args.format, args.output)
-    if args.command == "context7-library":
-        data = await service.docs_resolve(args.name, args.query)
-        return _print_result("docs", data, args.format, args.output)
-    if args.command == "context7-docs":
-        data = await service.docs_search(args.query, source=args.library_id)
-        return _print_result("docs", data, args.format, args.output)
     if args.command == "smoke":
         data = await service.smoke(args.mode)
         return _print_result("smoke", data, args.format, args.output)
@@ -2615,15 +2572,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="{search,docs,fetch,map,doctor,diagnose,skills,setup,config,dev}",
     )
 
-    search_parser = sub.add_parser("search", aliases=COMMAND_ALIASES["search"], help="Answer questions, discover sources, or find similar pages.")
+    search_parser = sub.add_parser("search", aliases=COMMAND_ALIASES["search"], help="Answer questions or discover sources.")
     search_parser.set_defaults(command="search")
     search_sub = search_parser.add_subparsers(dest="operation", required=True, parser_class=SmartSearchArgumentParser)
     search_answer = search_sub.add_parser("answer", help="Generate a web-backed answer.")
     search_answer.set_defaults(operation="answer")
     search_answer.add_argument("query")
-    stream_group = search_answer.add_mutually_exclusive_group()
-    stream_group.add_argument("--stream", dest="stream", action="store_true", default=None, help="Use stream=true for OpenAI-compatible main search.")
-    stream_group.add_argument("--no-stream", dest="stream", action="store_false", help="Force stream=false for OpenAI-compatible main search.")
     search_answer.add_argument("--timeout", type=float, default=90, metavar="SECONDS")
     search_answer.add_argument("--debug", action="store_true")
     _add_format_args(search_answer)
@@ -2631,7 +2585,6 @@ def build_parser() -> argparse.ArgumentParser:
     search_sources.set_defaults(operation="sources")
     search_sources.add_argument("query")
     search_sources.add_argument("--limit", type=int, default=5)
-    search_sources.add_argument("--mode", choices=["semantic", "keyword", "auto"], default="auto")
     search_sources.add_argument("--start-published-date", default="")
     search_sources.add_argument("--include-domains", nargs="+", default=[])
     search_sources.add_argument("--exclude-domains", nargs="+", default=[])
@@ -2640,12 +2593,6 @@ def build_parser() -> argparse.ArgumentParser:
     search_sources.add_argument("--include-highlights", action="store_true")
     search_sources.add_argument("--debug", action="store_true")
     _add_format_args(search_sources)
-    search_similar = search_sub.add_parser("similar", help="Find pages similar to a URL.")
-    search_similar.set_defaults(operation="similar")
-    search_similar.add_argument("url")
-    search_similar.add_argument("--limit", type=int, default=5)
-    search_similar.add_argument("--debug", action="store_true")
-    _add_format_args(search_similar)
 
     docs_parser = sub.add_parser("docs", help="Resolve, search, inspect, or read technical documentation and repositories.")
     docs_parser.set_defaults(command="docs")
@@ -2666,14 +2613,12 @@ def build_parser() -> argparse.ArgumentParser:
     docs_tree.set_defaults(operation="tree")
     docs_tree.add_argument("repo")
     docs_tree.add_argument("--path", default="")
-    docs_tree.add_argument("--ref", default="")
     docs_tree.add_argument("--debug", action="store_true")
     _add_format_args(docs_tree)
     docs_read = docs_sub.add_parser("read")
     docs_read.set_defaults(operation="read")
     docs_read.add_argument("repo")
     docs_read.add_argument("path")
-    docs_read.add_argument("--ref", default="")
     docs_read.add_argument("--debug", action="store_true")
     _add_format_args(docs_read)
 
@@ -2734,114 +2679,6 @@ def build_parser() -> argparse.ArgumentParser:
     map_site.add_argument("--debug", action="store_true")
     _add_format_args(map_site)
 
-    exa_parser = sub.add_parser(
-        "exa-search", aliases=COMMAND_ALIASES["exa-search"], help=argparse.SUPPRESS
-    )
-    exa_parser.set_defaults(command="exa-search")
-    exa_parser.add_argument("query")
-    exa_parser.add_argument("--num-results", type=int, default=5)
-    exa_parser.add_argument("--search-type", choices=["neural", "keyword", "auto"], default="neural")
-    exa_parser.add_argument("--include-text", action="store_true")
-    exa_parser.add_argument("--include-highlights", action="store_true")
-    exa_parser.add_argument("--start-published-date", default="")
-    exa_parser.add_argument("--include-domains", nargs="+", default="")
-    exa_parser.add_argument("--exclude-domains", nargs="+", default="")
-    exa_parser.add_argument("--category", default="")
-    _add_format_args(exa_parser)
-
-    similar_parser = sub.add_parser(
-        "exa-similar", aliases=COMMAND_ALIASES["exa-similar"], help=argparse.SUPPRESS
-    )
-    similar_parser.set_defaults(command="exa-similar")
-    similar_parser.add_argument("url")
-    similar_parser.add_argument("--num-results", type=int, default=5)
-    _add_format_args(similar_parser)
-
-    zhipu_parser = sub.add_parser(
-        "zhipu-search", aliases=COMMAND_ALIASES["zhipu-search"], help=argparse.SUPPRESS
-    )
-    zhipu_parser.set_defaults(command="zhipu-search")
-    zhipu_parser.add_argument("query")
-    zhipu_parser.add_argument("--count", type=int, default=10)
-    zhipu_parser.add_argument("--search-engine", default="")
-    zhipu_parser.add_argument("--search-recency-filter", default="noLimit")
-    zhipu_parser.add_argument("--search-domain-filter", default="")
-    zhipu_parser.add_argument("--content-size", choices=["medium", "high"], default="medium")
-    _add_format_args(zhipu_parser)
-
-    zhipu_mcp_search_parser = sub.add_parser(
-        "zhipu-mcp-search",
-        aliases=COMMAND_ALIASES["zhipu-mcp-search"],
-        help=argparse.SUPPRESS,
-    )
-    zhipu_mcp_search_parser.set_defaults(command="zhipu-mcp-search")
-    zhipu_mcp_search_parser.add_argument("query")
-    zhipu_mcp_search_parser.add_argument("--count", type=int, default=5)
-    _add_format_args(zhipu_mcp_search_parser)
-
-    zhipu_mcp_reader_parser = sub.add_parser(
-        "zhipu-mcp-reader",
-        aliases=COMMAND_ALIASES["zhipu-mcp-reader"],
-        help=argparse.SUPPRESS,
-    )
-    zhipu_mcp_reader_parser.set_defaults(command="zhipu-mcp-reader")
-    zhipu_mcp_reader_parser.add_argument("url")
-    _add_format_args(zhipu_mcp_reader_parser)
-
-    zhipu_mcp_search_doc_parser = sub.add_parser(
-        "zhipu-mcp-search-doc",
-        aliases=COMMAND_ALIASES["zhipu-mcp-search-doc"],
-        help=argparse.SUPPRESS,
-    )
-    zhipu_mcp_search_doc_parser.set_defaults(command="zhipu-mcp-search-doc")
-    zhipu_mcp_search_doc_parser.add_argument("repo")
-    zhipu_mcp_search_doc_parser.add_argument("query")
-    zhipu_mcp_search_doc_parser.add_argument("--max-results", type=int, default=5)
-    _add_format_args(zhipu_mcp_search_doc_parser)
-
-    zhipu_mcp_repo_structure_parser = sub.add_parser(
-        "zhipu-mcp-repo-structure",
-        aliases=COMMAND_ALIASES["zhipu-mcp-repo-structure"],
-        help=argparse.SUPPRESS,
-    )
-    zhipu_mcp_repo_structure_parser.set_defaults(command="zhipu-mcp-repo-structure")
-    zhipu_mcp_repo_structure_parser.add_argument("repo")
-    zhipu_mcp_repo_structure_parser.add_argument("--ref", default="")
-    _add_format_args(zhipu_mcp_repo_structure_parser)
-
-    zhipu_mcp_read_file_parser = sub.add_parser(
-        "zhipu-mcp-read-file",
-        aliases=COMMAND_ALIASES["zhipu-mcp-read-file"],
-        help=argparse.SUPPRESS,
-    )
-    zhipu_mcp_read_file_parser.set_defaults(command="zhipu-mcp-read-file")
-    zhipu_mcp_read_file_parser.add_argument("repo")
-    zhipu_mcp_read_file_parser.add_argument("path")
-    zhipu_mcp_read_file_parser.add_argument("--ref", default="")
-    _add_format_args(zhipu_mcp_read_file_parser)
-
-
-    context7_library_parser = sub.add_parser(
-        "context7-library",
-        aliases=COMMAND_ALIASES["context7-library"],
-        help=argparse.SUPPRESS,
-    )
-    context7_library_parser.set_defaults(command="context7-library")
-    context7_library_parser.add_argument("name")
-    context7_library_parser.add_argument("query", nargs="?", default="")
-    _add_format_args(context7_library_parser)
-
-    context7_docs_parser = sub.add_parser(
-        "context7-docs",
-        aliases=COMMAND_ALIASES["context7-docs"],
-        help=argparse.SUPPRESS,
-    )
-    context7_docs_parser.set_defaults(command="context7-docs")
-    context7_docs_parser.add_argument("library_id")
-    context7_docs_parser.add_argument("query")
-    _add_format_args(context7_docs_parser)
-
-
     smoke_parser = sub.add_parser(
         "smoke", aliases=COMMAND_ALIASES["smoke"], help=argparse.SUPPRESS
     )
@@ -2867,7 +2704,7 @@ def build_parser() -> argparse.ArgumentParser:
     diagnose_parser.set_defaults(command="diagnose")
     diagnose_sub = diagnose_parser.add_subparsers(dest="diagnose_command", required=True, parser_class=SmartSearchArgumentParser)
     for capability, operations in {
-        "search": ["answer", "sources", "similar"],
+        "search": ["answer", "sources"],
         "docs": ["resolve", "search", "tree", "read"],
         "fetch": ["content", "extract"],
         "map": ["site"],
@@ -3047,12 +2884,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _normalize_legacy_argv(argv: list[str]) -> list[str]:
-    if len(argv) >= 2 and argv[0] == "search" and argv[1] not in {"answer", "sources", "similar", "-h", "--help"}:
-        return ["search", "answer", *argv[1:]]
-    if len(argv) >= 2 and argv[0] == "fetch" and argv[1] not in {"content", "extract", "-h", "--help"}:
-        return ["fetch", "content", *argv[1:]]
-    if len(argv) >= 2 and argv[0] == "map" and argv[1] not in {"site", "-h", "--help"}:
-        return ["map", "site", *argv[1:]]
     if len(argv) >= 2 and argv[0] == "diagnose" and argv[1] == "openai-compatible":
         return ["diagnose", "provider", *argv[1:]]
     return argv
@@ -3062,25 +2893,9 @@ def _legacy_migration_hint(argv: list[str]) -> str:
     if not argv:
         return ""
     command = argv[0]
-    if command == "search" and len(argv) >= 2 and argv[1] not in {"answer", "sources", "similar", "-h", "--help"}:
-        return "smart-search search answer QUERY"
-    if command == "fetch" and len(argv) >= 2 and argv[1] not in {"content", "extract", "-h", "--help"}:
-        return "smart-search fetch content URL"
-    if command == "map" and len(argv) >= 2 and argv[1] not in {"site", "-h", "--help"}:
-        return "smart-search map site URL"
     if command == "diagnose" and len(argv) >= 2 and argv[1] == "openai-compatible":
         return "smart-search diagnose provider openai-compatible"
     migrations = {
-        "exa-search": "smart-search search sources",
-        "exa-similar": "smart-search search similar",
-        "zhipu-search": "smart-search search sources",
-        "zhipu-mcp-search": "smart-search search sources",
-        "zhipu-mcp-reader": "smart-search fetch content",
-        "zhipu-mcp-search-doc": "smart-search docs search",
-        "zhipu-mcp-repo-structure": "smart-search docs tree",
-        "zhipu-mcp-read-file": "smart-search docs read",
-        "context7-library": "smart-search docs resolve",
-        "context7-docs": "smart-search docs search",
         "route": "smart-search diagnose route",
         "route-calibrate": "smart-search diagnose route-calibrate",
         "smoke": "smart-search diagnose smoke",

@@ -20,15 +20,15 @@
 
 ## 3. Search 与 Docs 固定 Provider 实现
 
-- [ ] 3.1 修改 `search answer` 只执行配置选中的 Grok transport，删除公开 `--stream/--no-stream` 和跨 transport fallback
-- [ ] 3.2 修改 `search sources` 只调用 Exa Search，删除公开 `--mode`，使用配置的原生 type 并验证时间、domain、category、text、highlights 与 limit payload
-- [ ] 3.3 删除 `search similar` parser/service、deprecated Exa Find Similar adapter 和相关输出/诊断路径
-- [ ] 3.4 修改 `docs resolve` 只调用 Context7 library resolve/search
-- [ ] 3.5 实现 Context7 library id 与 GitHub `owner/repo` 的 source 解析、歧义处理和本地参数校验
-- [ ] 3.6 修改 `docs search` 对普通文档只调用 Context7、对 `owner/repo` 只调用 ZRead `search_doc`
-- [ ] 3.7 为 ZRead `search_doc.language` 实现 `zh|en` 语言推导/默认策略及测试
-- [ ] 3.8 修改 `docs tree` 只传 `repo_name`/`dir_path`、`docs read` 只传 `repo_name`/`file_path`，删除所有 `ref` 传递
-- [ ] 3.9 运行 search/docs/provider payload 聚焦测试，检查 diff 后提交 Search/Docs 阶段 commit
+- [x] 3.1 修改 `search answer` 只执行配置选中的 Grok transport，删除公开 `--stream/--no-stream` 和跨 transport fallback
+- [x] 3.2 修改 `search sources` 只调用 Exa Search，删除公开 `--mode`，使用配置的原生 type 并验证时间、domain、category、text、highlights 与 limit payload
+- [x] 3.3 删除 `search similar` parser/service、deprecated Exa Find Similar adapter 和相关输出/诊断路径
+- [x] 3.4 修改 `docs resolve` 只调用 Context7 library resolve/search
+- [x] 3.5 实现 Context7 library id 与 GitHub `owner/repo` 的 source 解析、歧义处理和本地参数校验
+- [x] 3.6 修改 `docs search` 对普通文档只调用 Context7、对 `owner/repo` 只调用 ZRead `search_doc`
+- [x] 3.7 为 ZRead `search_doc.language` 实现 `zh|en` 语言推导/默认策略及测试
+- [x] 3.8 修改 `docs tree` 只传 `repo_name`/`dir_path`、`docs read` 只传 `repo_name`/`file_path`，删除所有 `ref` 传递
+- [x] 3.9 运行 search/docs/provider payload 聚焦测试，检查 diff 后提交 Search/Docs 阶段 commit
 
 ## 4. Firecrawl 承接 Fetch 与 Map
 
