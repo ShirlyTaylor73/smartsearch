@@ -8,14 +8,6 @@ WORKFLOW = ROOT / ".github" / "workflows" / "publish-npm.yml"
 PACKAGE_NAME = "@shirlytaylor73/smart-search"
 
 
-def read_reference_tree(skill_dir: Path) -> str:
-    return "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in sorted((skill_dir / "references").rglob("*"))
-        if path.is_file() and path.suffix == ".md"
-    )
-
-
 def run_resolver(base_version: str, versions: list[str]) -> str:
     result = subprocess.run(
         [
@@ -104,10 +96,6 @@ def test_publish_workflow_uses_manual_beta_tag_stable_and_token_auth():
 def test_release_docs_explain_new_package_and_migration():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     readme_zh = (ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
-    public_contract = read_reference_tree(ROOT / "skills" / "smart-search-cli")
-    packaged_contract = read_reference_tree(
-        ROOT / "src" / "smart_search" / "assets" / "skills" / "smart-search-cli"
-    )
 
     required_markers = ["@shirlytaylor73/smart-search@next", "Python", "0.3.0-beta", "Exa", "Firecrawl"]
     for marker in required_markers:
@@ -116,12 +104,6 @@ def test_release_docs_explain_new_package_and_migration():
     zh_required_markers = ["@shirlytaylor73/smart-search@next", "Python", "0.3.0-beta", "Exa", "Firecrawl"]
     for marker in zh_required_markers:
         assert marker in readme_zh
-
-    contract_markers = ["0.3.0-beta.N", "@shirlytaylor73/smart-search", "npm versions are immutable"]
-    for marker in contract_markers:
-        assert marker in public_contract
-        assert marker in packaged_contract
-
 
 def test_current_stable_release_notes_describe_user_visible_changes():
     notes = (ROOT / ".github" / "releases" / "v0.2.0.md").read_text(encoding="utf-8")

@@ -1,32 +1,42 @@
 ---
 name: smart-search-cli
-description: "Deterministic CLI-first web, documentation, URL extraction, and site mapping for AI agents."
+description: "Use the Smart Search CLI for current web answers, source discovery, technical documentation, GitHub repository knowledge, known-URL reading or structured extraction, and site URL exploration."
 ---
 
 # Smart Search CLI
 
-Use the local `smart-search` command. Select operations by task intent; never select, reorder, or retry providers.
+Use `smart-search` to retrieve current, source-backed information.
 
-## Query operations
+## Choose an operation
 
-- `smart-search search answer QUERY --format json`: current-web answer.
-- `smart-search search sources QUERY --limit 5 --format json`: source discovery.
-- `smart-search docs resolve NAME [QUERY] --format json`: resolve a Context7 library id.
-- `smart-search docs search QUERY [--source SOURCE] --format json`: search library docs or `owner/repo` knowledge.
-- `smart-search docs tree REPO [--path PATH] --format json`: inspect repository structure.
-- `smart-search docs read REPO PATH --format content`: read a repository file.
-- `smart-search fetch content URL --format content`: retrieve readable content.
-- `smart-search fetch extract URL [--schema JSON] --format json`: extract structured data.
-- `smart-search map site URL [--search TEXT] --limit 50 --format json`: discover site URLs.
+| Task | Operation |
+|---|---|
+| Synthesize a current web answer | `search answer` |
+| Find relevant source URLs | `search sources` |
+| Resolve a library name to an id | `docs resolve` |
+| Search library docs or repository knowledge | `docs search` |
+| Inspect a repository directory | `docs tree` |
+| Read a repository file | `docs read` |
+| Read a known URL as useful text | `fetch content` |
+| Extract structured data from a known URL | `fetch extract` |
+| Discover URLs within a site | `map site` |
 
-## Selection rules
+## Combine operations
 
-- Use `search answer` for a synthesized answer and `search sources` for URLs/results.
-- Use `docs` for libraries, SDKs, repositories, directory trees, and files.
-- Use `fetch content` after a URL is known; use `fetch extract` only for structured fields.
-- Use `map site` for URL discovery, not page extraction or repository structure.
-- Do not use removed provider commands, `search similar`, `--mode`, repository `--ref`, or Tavily Map flags.
+- Discover and read web sources: `search sources` → `fetch content`.
+- Resolve and query stable library documentation: `docs resolve` → `docs search`.
+- Inspect and read repository code: `docs tree` → `docs read`.
 
-Provider responsibility, credentials, Exa type, transport selection, and timeouts are maintainer configuration. A provider failure is final for that operation; the agent must not emulate fallback.
+## Handle output and errors
 
-Default to JSON for structured results and content format for long bodies. Treat `config_error` as a maintainer issue and use `doctor`/`diagnose` only when troubleshooting is requested.
+- Use `--format json` for structured results and `--format content` for long readable bodies.
+- On a non-zero exit, inspect `error_type` and `error`, then run `smart-search diagnose CAPABILITY OPERATION` for that operation.
+- Use `--debug` when additional diagnostic metadata is useful.
+
+## Load details as needed
+
+- [Common flags, output, and diagnostics](references/common.md)
+- [Web answers and source discovery](references/search.md)
+- [Documentation and repositories](references/docs.md)
+- [Known-URL reading and extraction](references/fetch.md)
+- [Site URL exploration](references/map.md)
