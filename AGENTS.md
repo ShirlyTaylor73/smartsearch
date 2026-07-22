@@ -23,12 +23,43 @@
 
 当资料冲突时，应指出冲突并以更高优先级来源为准。外部技术资料应优先采用项目或依赖的最新官方文档，并记录关键版本或链接。
 
-### 智谱 Provider 官方参考
+### Provider 官方参考与强制核对规则
 
-- 智谱 Coding Plan MCP 官方文档：<https://docs.bigmodel.cn/cn/coding-plan/mcp>
-- 智谱工具 API 与 API Key 官方文档：<https://docs.bigmodel.cn/api-reference/%E5%B7%A5%E5%85%B7-api/>
+新增、修改、删除、排查或评审任何 provider 相关代码前，必须先核对对应 provider 的最新官方资料，再确定 endpoint、认证方式、请求参数、响应结构、流式协议、错误语义、重试条件和能力边界。该要求同样适用于已经从默认集合移除、计划删除、仅保留兼容入口或曾经进入设计讨论的 provider。
 
-涉及 `ZHIPU_API_KEY` 对应的智谱 REST provider，或 `ZHIPU_MCP_API_KEY` 对应的 MCP Search、MCP Reader、MCP zread provider 的新增、修改、排查和兼容性判断时，必须先使用 Tavily 读取并参考上述对应官方文档的最新内容，再确定 endpoint、认证方式、工具名称、请求参数、响应结构、错误语义和能力边界。不得仅凭模型记忆、历史实现或第三方资料修改相关 provider；实现记录或最终反馈中应注明实际参考的官方文档链接。若两份文档涉及共享认证或能力边界，应同时交叉核对。
+资料获取顺序如下：
+
+1. 若 Context7 能解析对应官方 library，先使用 `smart-search docs resolve` 和 `smart-search docs search` 获取版本化文档。
+2. Context7 没有覆盖时，使用当前 Smart Search CLI 的 Tavily-backed source discovery、`map site` 或 `fetch content`，并将检索范围限定到下表中的官方域名。
+3. MCP 官方页面未给出 input schema 时，连接官方 endpoint 执行只读 `tools/list`，以实际 schema 为准。
+4. 官方文档、官方 SDK 和 live schema 冲突时，优先级为 live schema / 当前 OpenAPI、当前官方 API reference、当前官方 SDK、仓库现有实现与历史记录。
+5. 不得使用第三方教程、聚合站、搜索摘要或模型记忆替代官方资料。第三方页面只能用于发现官方入口，不能作为 provider contract 的依据。
+6. 实现记录、commit/PR 说明或最终反馈中必须列出实际参考的官方链接和核对日期；需要真实凭据但未执行的 live 验证必须明确说明。
+
+#### 当前保留或候选保留的 Provider
+
+| Provider / adapter | 仓库中的对应范围 | 官方资料 |
+|---|---|---|
+| xAI Responses / Grok | `XAI_API_*`、`xai_responses.py`、`search.answer` | [xAI REST API Reference](https://docs.x.ai/developers/rest-api-reference/inference/chat)、[Tools Overview](https://docs.x.ai/developers/tools/overview)、[Web Search](https://docs.x.ai/developers/tools/web-search)、[X Search](https://docs.x.ai/developers/tools/x-search) |
+| OpenAI-compatible transport | `OPENAI_COMPATIBLE_*`、`openai_compatible.py` | [OpenAI Chat Completions Overview](https://developers.openai.com/api/reference/chat-completions/overview)、[Create Chat Completion](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)。OpenAI 文档只定义协议基线；修改自定义 relay 兼容性时还必须读取目标 endpoint 运营方的官方文档，不能假设所有 OpenAI-compatible 服务完全一致 |
+| Exa | `EXA_*`、`exa.py`、来源搜索 | [Search API Guide](https://docs.exa.ai/docs/reference/search-api-guide)、[Search API Reference](https://docs.exa.ai/docs/reference/search)、[官方 Python SDK](https://github.com/exa-labs/exa-py)。涉及旧 `findSimilar` 时必须先核对 SDK 的 deprecated 标记，不得沿用旧文档假设 |
+| Context7 | `CONTEXT7_*`、`context7.py`、文档 resolve/search | [Context7 API Guide](https://context7.com/docs/api-guide)、[官方仓库](https://github.com/upstash/context7) |
+| Zhipu MCP ZRead | `ZHIPU_MCP_API_KEY`、`ZHIPU_MCP_ZREAD_API_URL`、`zhipu_mcp.py` 的仓库工具 | [Coding Plan MCP 总览](https://docs.bigmodel.cn/cn/coding-plan/mcp)、[ZRead MCP](https://docs.bigmodel.cn/cn/coding-plan/mcp/zread-mcp-server)。修改 `search_doc`、`get_repo_structure`、`read_file` 前必须再次执行 `tools/list`；当前已知 schema 不包含 `ref` |
+| Firecrawl | `FIRECRAWL_*`、Search/Scrape/JSON/Map 调用 | [Search API](https://docs.firecrawl.dev/api-reference/endpoint/search)、[Scrape API](https://docs.firecrawl.dev/api-reference/endpoint/scrape)、[Map API](https://docs.firecrawl.dev/api-reference/endpoint/map)、[官方文档索引](https://docs.firecrawl.dev/llms.txt) |
+
+#### 已移除、计划移除或历史讨论过的 Provider
+
+| Provider | 历史范围 | 官方资料与注意事项 |
+|---|---|---|
+| Zhipu REST Web Search | `ZHIPU_API_KEY`、`zhipu.py` | [工具 API 总览](https://docs.bigmodel.cn/api-reference/%E5%B7%A5%E5%85%B7-api/)、[网络搜索 API](https://docs.bigmodel.cn/api-reference/%E5%B7%A5%E5%85%B7-api/%E7%BD%91%E7%BB%9C%E6%90%9C%E7%B4%A2)。该凭据与 Coding Plan MCP key 不得混用 |
+| Zhipu MCP Web Search | `ZHIPU_MCP_SEARCH_API_URL`、`web_search_prime` | [联网搜索 MCP](https://docs.bigmodel.cn/cn/coding-plan/mcp/search-mcp-server)、[Coding Plan MCP 总览](https://docs.bigmodel.cn/cn/coding-plan/mcp) |
+| Zhipu MCP Web Reader | `ZHIPU_MCP_READER_API_URL`、`webReader` | [网页读取 MCP](https://docs.bigmodel.cn/cn/coding-plan/mcp/reader-mcp-server)、[Coding Plan MCP 总览](https://docs.bigmodel.cn/cn/coding-plan/mcp) |
+| Tavily | Search、Extract、Map 与 fallback | [Search API](https://docs.tavily.com/documentation/api-reference/endpoint/search)、[Extract API](https://docs.tavily.com/documentation/api-reference/endpoint/extract)、[Map API](https://docs.tavily.com/documentation/api-reference/endpoint/map) |
+| Jina Reader | `JINA_*`、`jina.py`、URL/PDF Reader | [Reader 官方页面](https://jina.ai/reader)、[Reader API Dashboard](https://jina.ai/api-dashboard/reader)。匿名 `r.jina.ai` 与带 key 的 API 行为不得视为完全相同 |
+| AnySearch | 已删除的 vertical/domain/batch/extract MCP provider | [AnySearch 官方站](https://www.anysearch.com)、[官方 MCP Server 仓库](https://github.com/anysearch-ai/anysearch-mcp-server)。未发现独立、稳定的公开 API reference；若恢复集成，必须以官方仓库和 live `tools/list` 重新建立 contract，不得照搬历史实现 |
+| DeepWiki | 曾作为 ZRead 替代方案讨论，当前未实现 | [DeepWiki MCP](https://docs.devin.ai/work-with-devin/deepwiki-mcp)、[DeepWiki](https://deepwiki.com)。若未来接入，必须区分面向人类的 DeepWiki 页面与 MCP 工具契约 |
+
+智谱相关 provider 仍有额外强制要求：涉及 `ZHIPU_API_KEY` 对应的 REST provider，或 `ZHIPU_MCP_API_KEY` 对应的 MCP Search、Reader、ZRead provider 时，必须先通过 Tavily/Smart Search 读取上述对应官方页面的最新内容；若涉及共享认证或能力边界，必须同时交叉核对 REST 与 Coding Plan MCP 文档。
 
 ## 仓库结构
 
