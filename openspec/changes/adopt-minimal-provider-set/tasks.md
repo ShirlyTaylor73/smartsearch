@@ -4,8 +4,8 @@
 - [x] 1.2 对照 Exa 官方 Search API 与 Python SDK，记录当前 type 枚举并确认 `find_similar/findSimilar` 已 deprecated
 - [x] 1.3 对照 Firecrawl 官方 Scrape JSON/Markdown 与 Map 文档，确定 `sitemap`、location schema、默认值、limit 和毫秒 timeout 映射
 - [x] 1.4 通过 ZRead 官方文档与 MCP `tools/list` 固定 `search_doc`、`get_repo_structure`、`read_file` 的实际 input schema
-- [ ] 1.5 在 `tests/` 先添加公开命令 → 唯一 provider/tool、禁止 fallback、删除 `search similar`、`--mode`、旧参数/命令的失败测试
-- [ ] 1.6 提交契约测试阶段 commit，并复核测试失败原因只来自尚未实现的新契约
+- [x] 1.5 在 `tests/` 先添加公开命令 → 唯一 provider/tool、禁止 fallback、删除 `search similar`、`--mode`、旧参数/命令的失败测试
+- [x] 1.6 提交契约测试阶段 commit，并复核测试失败原因只来自尚未实现的新契约
 
 ## 2. 确定性配置与 Operation Executor
 
