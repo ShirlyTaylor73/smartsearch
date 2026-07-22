@@ -12,6 +12,7 @@ from ..logger import log_info
 
 
 RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+MAX_LIBRARY_REDIRECTS = 3
 
 
 def _is_retryable_exception(exc) -> bool:
@@ -85,18 +86,33 @@ class Context7Provider(BaseSearchProvider):
         return json.dumps(output, ensure_ascii=False, indent=2)
 
     async def docs(self, library_id: str, query: str, ctx=None) -> str:
-        endpoint = f"{self.api_url}/api/v2/context?libraryId={quote(library_id, safe='')}&query={quote(query)}"
         await log_info(ctx, f"Context7 docs: {library_id} {query}", config.debug_enabled)
         start_time = time.time()
+        current_library_id = library_id
+        redirected_from = ""
         try:
-            data = await self._get_with_retry(endpoint)
+            for _ in range(MAX_LIBRARY_REDIRECTS + 1):
+                endpoint = f"{self.api_url}/api/v2/context?libraryId={quote(current_library_id, safe='')}&query={quote(query)}"
+                data = await self._get_with_retry(endpoint, accepted_status_codes={301})
+                if not isinstance(data, dict) or not data.get("error"):
+                    break
+                if data.get("error") != "library_redirected":
+                    raise ValueError(str(data.get("message") or data.get("error")))
+                redirect_url = data.get("redirectUrl")
+                if not isinstance(redirect_url, str) or not redirect_url.startswith("/") or redirect_url == current_library_id:
+                    raise ValueError("Context7 returned an invalid library redirect")
+                redirected_from = redirected_from or current_library_id
+                current_library_id = redirect_url
+            else:
+                raise ValueError("Context7 library redirect limit exceeded")
+
             elapsed_ms = round((time.time() - start_time) * 1000, 2)
             snippets = data.get("codeSnippets", []) if isinstance(data, dict) else []
             info = data.get("infoSnippets", []) if isinstance(data, dict) else []
             content = json.dumps(data, ensure_ascii=False) if isinstance(data, dict) else str(data)
             output = {
                 "ok": True,
-                "library_id": library_id,
+                "library_id": current_library_id,
                 "query": query,
                 "provider": "context7",
                 "code_snippets": snippets,
@@ -106,6 +122,8 @@ class Context7Provider(BaseSearchProvider):
                 "content": content,
                 "elapsed_ms": elapsed_ms,
             }
+            if redirected_from:
+                output["redirected_from"] = redirected_from
         except Exception as e:
             elapsed_ms = round((time.time() - start_time) * 1000, 2)
             output = {
@@ -118,8 +136,9 @@ class Context7Provider(BaseSearchProvider):
             }
         return json.dumps(output, ensure_ascii=False, indent=2)
 
-    async def _get_with_retry(self, endpoint: str) -> Any:
+    async def _get_with_retry(self, endpoint: str, accepted_status_codes: set[int] | None = None) -> Any:
         timeout = httpx.Timeout(connect=6.0, read=self.timeout, write=10.0, pool=None)
+        accepted_status_codes = accepted_status_codes or set()
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             async for attempt in AsyncRetrying(
                 stop=stop_after_attempt(config.retry_max_attempts + 1),
@@ -129,7 +148,8 @@ class Context7Provider(BaseSearchProvider):
             ):
                 with attempt:
                     response = await client.get(endpoint, headers=self._headers())
-                    response.raise_for_status()
+                    if response.status_code not in accepted_status_codes:
+                        response.raise_for_status()
                     content_type = response.headers.get("content-type", "")
                     if "application/json" in content_type:
                         return response.json()
