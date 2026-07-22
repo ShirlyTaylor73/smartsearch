@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: 固定的四大能力命令树
-系统 SHALL 公开 `search answer|sources|similar`、`docs resolve|search|tree|read`、`fetch content|extract` 和 `map site`，并 SHALL NOT 在这些 Agent 查询命令中接受 provider 或 fallback 选择参数。
+系统 SHALL 公开 `search answer|sources`、`docs resolve|search|tree|read`、`fetch content|extract` 和 `map site`，并 SHALL NOT 在这些 Agent 查询命令中接受 provider、fallback 或 Exa search type 选择参数。
 
 #### Scenario: 查看查询帮助
 - **WHEN** 用户运行 `smart-search --help` 或任一四大能力的 `--help`
@@ -22,25 +22,30 @@
 - **AND** stream 行为由配置决定而不是由 Agent 参数选择
 
 ### Requirement: Search Sources 固定使用 Exa Search
-`smart-search search sources QUERY` SHALL 只调用 Exa Search，并 SHALL 支持 `--limit`、`--mode semantic|keyword|auto`、`--start-published-date`、`--include-domains`、`--exclude-domains`、`--category`、`--include-text` 和 `--include-highlights`。
+`smart-search search sources QUERY` SHALL 只调用 Exa Search，并 SHALL 支持 `--limit`、`--start-published-date`、`--include-domains`、`--exclude-domains`、`--category`、`--include-text` 和 `--include-highlights`；命令 SHALL NOT 接受 `--mode`。
 
-#### Scenario: 执行语义来源搜索
-- **WHEN** Agent 运行 `smart-search search sources "agent search" --mode semantic --limit 5 --include-highlights`
-- **THEN** 系统把 `semantic` 映射为 Exa 的 neural search 并传递结果数量与 highlights 参数
+#### Scenario: 执行来源搜索
+- **WHEN** Agent 运行 `smart-search search sources "agent search" --limit 5 --include-highlights`
+- **THEN** 系统使用配置的 Exa 原生 type（默认 `auto`）并传递结果数量与 highlights 参数
 - **AND** 返回规范化 `results` 与 `sources`
+
+#### Scenario: 使用已删除的 mode 参数
+- **WHEN** 用户传入 `--mode semantic`、`--mode keyword` 或 `--mode auto`
+- **THEN** CLI 返回参数错误并说明检索策略已由 Exa type 配置管理
+- **AND** 不向 Exa 发出请求
 
 #### Scenario: Exa 不接受请求参数
 - **WHEN** 请求参数不能合法映射到 Exa Search schema
 - **THEN** 系统在调用前或收到 400/422 后返回 `parameter_error`
 - **AND** 不尝试其他 search provider
 
-### Requirement: Search Similar 固定使用 Exa Find Similar
-`smart-search search similar URL` SHALL 只调用 Exa Find Similar，并 SHALL 支持 `--limit` 控制最大结果数。
+### Requirement: Search Similar 已移除
+CLI SHALL NOT 提供 `smart-search search similar`，也 SHALL NOT 调用 deprecated Exa `findSimilar` endpoint。
 
-#### Scenario: 查找相似页面
-- **WHEN** Agent 运行 `smart-search search similar https://example.com/article --limit 3`
-- **THEN** 系统调用 Exa `/findSimilar`
-- **AND** 返回最多三个规范化相似页面结果
+#### Scenario: 调用已删除的 Similar 子命令
+- **WHEN** 用户运行 `smart-search search similar https://example.com/article`
+- **THEN** CLI 将 `similar` 视为不存在的 search 子命令
+- **AND** 错误不得声称普通 Exa Search 是语义等价替代
 
 ### Requirement: Docs Resolve 固定使用 Context7
 `smart-search docs resolve NAME [QUERY]` SHALL 只使用 Context7 library resolve/search 返回候选文档来源标识。
@@ -62,6 +67,11 @@
 - **WHEN** Agent 运行 `smart-search docs search "最近的重要 PR" --source owner/repo`
 - **THEN** 系统只调用 ZRead `search_doc(repo_name, query, language?)`
 - **AND** `repo_name` 等于规范化的 `owner/repo`
+
+#### Scenario: 推导 ZRead language
+- **WHEN** 仓库查询包含中文字符
+- **THEN** 系统向 `search_doc` 传递 `language=zh`
+- **AND** 其他查询传递 `language=en` 或经配置验证的 `zh|en` 默认值
 
 #### Scenario: Source 形式无效
 - **WHEN** source 既不是有效 Context7 library id 也不是规范化 `owner/repo`
@@ -111,12 +121,22 @@
 - **AND** 不退化为普通 Markdown 抓取
 
 ### Requirement: Map Site 固定使用 Firecrawl Map
-`smart-search map site URL` SHALL 只调用 Firecrawl Map，并 SHALL 支持 `--search`、`--sitemap include|skip|only`、`--include-subdomains`、`--ignore-query-parameters`、`--ignore-cache`、`--limit`、`--timeout` 和 `--location`。
+`smart-search map site URL` SHALL 只调用 Firecrawl Map，并 SHALL 支持 `--search`、`--sitemap include|skip|only`、`--include-subdomains/--no-include-subdomains`、`--ignore-query-parameters/--no-ignore-query-parameters`、`--ignore-cache`、`--limit`、秒制 `--timeout` 和 JSON object `--location`。默认值 SHALL 对应 Firecrawl：`sitemap=include`、`includeSubdomains=true`、`ignoreQueryParameters=true`、`ignoreCache=false`、`limit=5000`。
 
 #### Scenario: 探索文档站
 - **WHEN** Agent 运行 `smart-search map site https://docs.example.com --search authentication --include-subdomains --limit 50`
 - **THEN** 系统把参数映射到 Firecrawl Map
 - **AND** 通过 `entries` 或 `results` 返回站内 URL
+
+#### Scenario: 转换 Map timeout 与 location
+- **WHEN** Agent 运行 `map site` 并提供 `--timeout 60 --location '{"country":"US","languages":["en-US"]}'`
+- **THEN** adapter 向 Firecrawl 传递 `timeout=60000` 和对应 location object
+- **AND** country 非大写二字母代码、languages 非字符串数组或未知 location 字段返回 `parameter_error`
+
+#### Scenario: Map limit 越界
+- **WHEN** `--limit` 小于 1 或大于 100000
+- **THEN** CLI 返回 `parameter_error`
+- **AND** 不向 Firecrawl 发出请求
 
 #### Scenario: Tavily Map 参数已移除
 - **WHEN** 用户传入 `--instructions`、`--max-depth` 或 `--max-breadth`
@@ -136,7 +156,7 @@
 - **THEN** 输出不包含 provider 候选、fallback attempts、密钥或内部异常堆栈
 
 ### Requirement: 删除不再支持的 provider 兼容入口
-CLI SHALL 移除 Tavily、Jina、Zhipu REST、Zhipu MCP Search/Reader、DeepWiki 及旧 provider 专用查询命令，并 SHALL NOT 将旧命令转发给不同 provider。
+CLI SHALL 移除 Tavily、Jina、Zhipu REST、Zhipu MCP Search/Reader、DeepWiki 及旧 provider 专用查询命令，并 SHALL NOT 将旧命令转发给不同 provider；旧 `exa-similar` SHALL 与 `search similar` 一并删除且不提供等价迁移目标。
 
 #### Scenario: 调用旧 provider 命令
 - **WHEN** 用户运行已移除的 provider 专用命令

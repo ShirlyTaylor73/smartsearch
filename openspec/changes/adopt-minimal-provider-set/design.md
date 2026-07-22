@@ -4,7 +4,7 @@
 
 本变更保留任务级 CLI，不再追求 provider 可互换。配置者只负责提供最小覆盖集的凭据并选择 Grok 接入格式；Agent 不接触 provider。公开 JSON/Markdown/content 输出继续作为稳定契约，敏感配置与原始异常不得泄漏。
 
-实现必须以当前官方文档为准，尤其是 Exa Search/Find Similar、Firecrawl Scrape/JSON/Map、Context7 API 和 Zhipu Coding Plan ZRead MCP。ZRead 当前工具 schema 为 `search_doc(repo_name, query, language?)`、`get_repo_structure(repo_name, dir_path?)`、`read_file(repo_name, file_path)`，不存在 `ref`。
+实现必须以当前官方文档为准，尤其是 Exa Search、Firecrawl Scrape/JSON/Map、Context7 API 和 Zhipu Coding Plan ZRead MCP。Exa 当前 Search `type` 为 `instant|fast|auto|deep-lite|deep|deep-reasoning`，官方 SDK 已将 `find_similar()/findSimilar` 标记为 deprecated。ZRead 实时 `tools/list` 确认工具 schema 为 `search_doc(repo_name, query, language?)`、`get_repo_structure(repo_name, dir_path?)`、`read_file(repo_name, file_path)`，其中 `language` 只接受 `zh|en`，三个工具均不接受 `ref`。
 
 ## Goals / Non-Goals
 
@@ -32,7 +32,6 @@
 |---|---|---|---|---|
 | `search` | `answer QUERY` | Grok | 配置选择 xAI Responses API 或 OpenAI-compatible Chat Completions | `SMART_SEARCH_GROK_TRANSPORT` 二选一 |
 | `search` | `sources QUERY` | Exa | `/search` | 无 |
-| `search` | `similar URL` | Exa | `/findSimilar` | 无 |
 | `docs` | `resolve NAME [QUERY]` | Context7 | library resolve/search | 无 |
 | `docs` | `search QUERY` | Context7 | docs/context lookup | 未提供 `--source`，或 source 为 Context7 library id |
 | `docs` | `search QUERY --source owner/repo` | Zhipu MCP ZRead | `search_doc` | source 符合 GitHub `owner/repo` 形式 |
@@ -45,6 +44,8 @@
 “唯一 provider”表示一次 operation 只会调用表中 provider。Grok 的两个 transport 是同一回答能力的部署格式，由配置明确选择；系统不得因一个 transport 失败而尝试另一个。相同 provider 内针对 408/429/5xx/网络瞬断的有限重试可以保留，但重试必须使用同一 endpoint、同一 operation 和等价参数，并受统一超时预算约束。
 
 选择固定矩阵而不是继续 feature negotiation，是因为它能让参数是否生效在调用前确定，也把 live smoke 测试数量从 provider 组合矩阵降为每个 operation 一条主路径。代价是单点故障时立即失败，这是本设计接受的显式行为。
+
+`search similar` 不进入新版矩阵。Exa 官方 SDK 已明确将 `findSimilar` 标记为 deprecated 并建议改用 Search，但普通 Search 接受文本 query，不能保证与“给定 URL 查找内容相似页面”语义等价，因此本变更直接删除该子命令，不做误导性转发。
 
 ### 2. Grok transport 由单一配置键选择
 
@@ -64,24 +65,25 @@
 - source 为规范化 GitHub `owner/repo`：调用 ZRead `search_doc(repo_name, query, language?)`。
 - source 既不是有效 library id 也不是 `owner/repo`：在发出网络请求前返回 `parameter_error`。
 
-由于 `/owner/repo` 形式可能同时像 Context7 id，CLI 应优先识别显式 Context7 id 的格式/来源；README 必须指导普通库文档先运行 `docs resolve` 并复用返回 id，GitHub 仓库则使用不带前导 `/` 的 `owner/repo`。ZRead 的 `language` 不新增 Agent 必填项：服务层根据 query 的主要语言推导 `zh`/`en`，无法稳定判断时使用配置默认值，且只传递官方 schema 接受的值。
+由于 `/owner/repo` 形式可能同时像 Context7 id，CLI 应优先识别显式 Context7 id 的格式/来源；README 必须指导普通库文档先运行 `docs resolve` 并复用返回 id，GitHub 仓库则使用不带前导 `/` 的 `owner/repo`。ZRead 的 `language` 不新增 Agent 必填项：服务层根据 query 是否包含中文字符推导 `zh` 或 `en`，无法判断时使用配置默认值，并只传递实时 `tools/list` 确认的 `zh|en`。
 
 ### 4. 每个子命令只公开唯一 provider 可兑现的参数
 
 | 子命令 | 公开任务参数 | 适配规则 |
 |---|---|---|
 | `search answer` | `QUERY`、`--timeout` | 由选定 Grok transport 执行 |
-| `search sources` | `QUERY`、`--limit`、`--mode semantic|keyword|auto`、`--start-published-date`、`--include-domains`、`--exclude-domains`、`--category`、`--include-text`、`--include-highlights` | `semantic` 映射 Exa `neural`，其余字段一一映射 Exa Search；不支持值返回 `parameter_error` |
-| `search similar` | `URL`、`--limit` | 映射 Exa Find Similar |
+| `search sources` | `QUERY`、`--limit`、`--start-published-date`、`--include-domains`、`--exclude-domains`、`--category`、`--include-text`、`--include-highlights` | 一一映射 Exa Search；Search `type` 默认使用官方推荐的 `auto`，不由 Agent 参数控制 |
 | `docs resolve` | `NAME [QUERY]` | 映射 Context7 library resolve |
 | `docs search` | `QUERY [--source SOURCE]` | 按上一决策确定性选择 Context7 或 ZRead |
 | `docs tree` | `REPO [--path PATH]` | `--path` 映射 ZRead `dir_path`；删除 `--ref` |
 | `docs read` | `REPO PATH` | 映射 ZRead `file_path`；删除 `--ref` |
 | `fetch content` | `URL` | Firecrawl Scrape 请求 Markdown/正文 |
 | `fetch extract` | `URL`、`--schema JSON`、`--max-length N` | Firecrawl Scrape 请求 JSON format；`--max-length` 只限制返回的 `raw_evidence`，不截断 `data` |
-| `map site` | `URL`、`--search TEXT`、`--sitemap include|skip|only`、`--include-subdomains`、`--ignore-query-parameters`、`--ignore-cache`、`--limit N`、`--timeout SECONDS`、`--location JSON` | 一一映射 Firecrawl Map；`--location` 必须是包含官方支持字段的 JSON object |
+| `map site` | `URL`、`--search TEXT`、`--sitemap include|skip|only`、`--include-subdomains/--no-include-subdomains`、`--ignore-query-parameters/--no-ignore-query-parameters`、`--ignore-cache`、`--limit N`、`--timeout SECONDS`、`--location JSON` | 一一映射 Firecrawl Map；秒制 timeout 转为毫秒，location 仅接受 `country` 与 `languages` |
 
-所有 operation 继续支持 `--debug`、`--format json|markdown|content`、`--output PATH` 等公共功能参数。`map site` 删除 Tavily 专有的 `--instructions`、`--max-depth`、`--max-breadth`；迁移文档给出 `--search` 和 Firecrawl sitemap/subdomain 参数的替代示例。CLI 不接受后再静默丢弃任何 provider 不支持的参数。
+所有 operation 继续支持 `--debug`、`--format json|markdown|content`、`--output PATH` 等公共功能参数。`search sources` 删除 `--mode`，避免把 Exa 已内置的检索策略错误描述为可切换的 semantic/keyword；维护者如需控制速度/深度，可通过 `EXA_SEARCH_TYPE` 选择 Exa 当前原生枚举，默认 `auto`。`map site` 删除 Tavily 专有的 `--instructions`、`--max-depth`、`--max-breadth`；迁移文档给出 `--search` 和 Firecrawl sitemap/subdomain 参数的替代示例。CLI 不接受后再静默丢弃任何 provider 不支持的参数。
+
+Firecrawl Map 使用官方默认值：`sitemap=include`、`includeSubdomains=true`、`ignoreQueryParameters=true`、`ignoreCache=false`、`limit=5000`；limit 必须处于 `1..100000`。CLI 的 `--timeout` 使用秒以保持人类可读性，adapter 转为官方要求的毫秒；location 的 `country` 必须为大写 ISO 3166-1 alpha-2，`languages` 必须为字符串数组。
 
 ### 5. 删除通用 provider registry，保留 operation executor
 
@@ -96,7 +98,7 @@
 保留的主要凭据为：
 
 - Grok：选定 transport 对应的一组 XAI 或 OpenAI-compatible 配置。
-- Exa：`EXA_API_KEY`、`EXA_BASE_URL`、`EXA_TIMEOUT_SECONDS`。
+- Exa：`EXA_API_KEY`、`EXA_BASE_URL`、`EXA_TIMEOUT_SECONDS`、`EXA_SEARCH_TYPE`；最后一项只允许当前官方枚举且默认 `auto`。
 - Context7：`CONTEXT7_API_KEY`、`CONTEXT7_BASE_URL`、`CONTEXT7_TIMEOUT_SECONDS`。
 - ZRead：`ZHIPU_MCP_API_KEY`、`ZHIPU_MCP_ZREAD_API_URL`、`ZHIPU_MCP_TIMEOUT_SECONDS`。
 - Firecrawl：`FIRECRAWL_API_KEY`、`FIRECRAWL_API_URL`，并增加明确的 timeout 配置（若当前没有独立字段）。
@@ -113,16 +115,17 @@
 
 保留完整维护树：`diagnose search|docs|fetch|map`、`diagnose provider`、`diagnose route`、`diagnose route-calibrate`、`diagnose smoke`，以及 `doctor`。operation diagnose 输出固定 `responsible_provider`、必需配置状态、endpoint connectivity 和参数/schema 检查，不再输出候选、顺序、single-provider 或 fallback 状态。
 
-`diagnose provider` 只允许 Grok 的两个 transport、Exa、Context7、Zhipu MCP ZRead 和 Firecrawl。`doctor` 按责任矩阵列出全部 operation；同一凭据覆盖多个 operation 时仍逐项报告 executor 是否完整。route/route-calibrate 仅作为查询意图调试保留，不参与已明确 operation 的 provider 选择。
+`diagnose provider` 只允许 Grok 的两个 transport、Exa、Context7、Zhipu MCP ZRead 和 Firecrawl。`doctor` 按责任矩阵列出全部 operation；同一凭据覆盖多个 operation 时仍逐项报告 executor 是否完整。search diagnose 只包含 `answer|sources`，不得继续展示 `similar`。route/route-calibrate 仅作为查询意图调试保留，不参与已明确 operation 的 provider 选择。
 
 ### 9. 删除 provider 专用兼容入口
 
-旧 `exa-search`、`exa-similar`、Context7、Zhipu、Zhipu MCP、Tavily、Jina、旧 `fetch`/`map` provider 形态不再隐藏转发。继续转发会把旧命令语义悄悄改为另一个 provider，违背确定性契约。破坏性版本在 parser 层把这些命令视为不存在，并在 README 的迁移表中给出对应新 operation；AnySearch 和 Deep Research 仍保持已删除状态。
+旧 `exa-search`、`exa-similar`、Context7、Zhipu、Zhipu MCP、Tavily、Jina、旧 `fetch`/`map` provider 形态不再隐藏转发。`exa-search` 的迁移目标是 `search sources`；`exa-similar` 与 `search similar` 一并删除且没有语义等价替代。继续转发会把旧命令语义悄悄改为另一个 provider，违背确定性契约。AnySearch 和 Deep Research 仍保持已删除状态。
 
 ## Risks / Trade-offs
 
 - [唯一 provider 故障会使 operation 不可用] → doctor、operation diagnose 和 live smoke 提前发现；运行时返回明确错误，不伪装降级。
 - [Exa 或 Firecrawl 官方 schema 变化] → adapter 层集中维护请求/响应映射，契约测试固定 outbound payload，并在相关修改中对照官方文档。
+- [删除 Exa Similar 会减少一个查询动作] → 明确 deprecated endpoint 没有可靠等价替代；未来只有在 Exa 提供新的官方相似检索契约时才通过独立 change 恢复。
 - [`docs search --source` 形式可能歧义] → 定义 Context7 id 与 `owner/repo` 的规范形式，先本地校验并在帮助中提供 resolve 工作流。
 - [删除 `--ref` 降低仓库精确版本能力] → 明确这是 ZRead 当前能力边界；未来若 provider 官方增加 ref，再通过独立 change 恢复。
 - [Firecrawl Map 与 Tavily Map 参数不兼容] → 作为 breaking change 删除旧参数，提供参数迁移表和 parser 回归测试。
@@ -131,7 +134,7 @@
 
 ## Migration Plan
 
-1. 先添加 CLI 参数、固定责任矩阵、无 fallback、ZRead schema 和 Firecrawl Map 的失败测试。
+1. 先添加 CLI 参数、固定责任矩阵、无 fallback、删除 `search similar/--mode`、ZRead schema 和 Firecrawl Map 的失败测试。
 2. 引入确定性 operation descriptor 与 `SMART_SEARCH_GROK_TRANSPORT`，迁移 `search` 与 `docs` executor。
 3. 扩展 Firecrawl adapter 覆盖 content、JSON extract、Map，并迁移 `fetch`、`map`。
 4. 删除 provider registry/fallback/feature negotiation 和被淘汰 provider 代码、配置、诊断及测试。
@@ -143,5 +146,12 @@
 
 ## Open Questions
 
-- Firecrawl Map 的 `location` 是否首版直接公开 JSON object，还是拆成 `--country`/`--language`；实现前应以当前官方 schema 和 CLI 易用性测试最终确定，但不得静默忽略未知字段。
-- ZRead `search_doc.language` 的官方允许值需要在实现前再次通过 `tools/list` 或官方文档核对；若该字段为自由文本，则仍应限制为仓库内测试覆盖的稳定值。
+无。Firecrawl Map 的 `location` 首版使用 JSON object，严格限制为官方 `country`/`languages` schema；ZRead `language` 已通过实时 `tools/list` 确认为 `zh|en`。
+
+## Official References
+
+- Exa Search API：<https://docs.exa.ai/reference/search>
+- Exa 官方 Python SDK（`find_similar` deprecation）：<https://github.com/exa-labs/exa-py>
+- Firecrawl Scrape：<https://docs.firecrawl.dev/api-reference/endpoint/scrape>
+- Firecrawl Map OpenAPI：<https://docs.firecrawl.dev/api-reference/endpoint/map.md>
+- ZRead MCP：<https://docs.bigmodel.cn/cn/coding-plan/mcp/zread-mcp-server.md>
