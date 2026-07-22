@@ -1,0 +1,34 @@
+{
+  "SMART_SEARCH_GROK_TRANSPORT": "openai-compatible",
+  "OPENAI_COMPATIBLE_API_URL": "https://YOUR-GROK-OPENAI-COMPATIBLE-ENDPOINT/v1",
+  "OPENAI_COMPATIBLE_API_KEY": "REPLACE_WITH_GROK_API_KEY",
+  "OPENAI_COMPATIBLE_MODEL": "REPLACE_WITH_GROK_MODEL",
+  "OPENAI_COMPATIBLE_STREAM": "true",
+
+  "EXA_API_KEY": "REPLACE_WITH_EXA_API_KEY",
+  "EXA_BASE_URL": "https://api.exa.ai",
+  "EXA_TIMEOUT_SECONDS": "30",
+  "EXA_SEARCH_TYPE": "auto",
+
+  "CONTEXT7_API_KEY": "REPLACE_WITH_CONTEXT7_API_KEY",
+  "CONTEXT7_BASE_URL": "https://context7.com",
+  "CONTEXT7_TIMEOUT_SECONDS": "30",
+
+  "ZHIPU_MCP_API_KEY": "REPLACE_WITH_ZHIPU_MCP_API_KEY",
+  "ZHIPU_MCP_ZREAD_API_URL": "https://open.bigmodel.cn/api/mcp/zread/mcp",
+  "ZHIPU_MCP_TIMEOUT_SECONDS": "30",
+
+  "FIRECRAWL_API_KEY": "REPLACE_WITH_FIRECRAWL_API_KEY",
+  "FIRECRAWL_API_URL": "https://api.firecrawl.dev/v2",
+  "FIRECRAWL_TIMEOUT_SECONDS": "30",
+
+  "SMART_SEARCH_OPERATION_TIMEOUTS": "{\"search.answer\":120,\"search.sources\":60,\"docs.resolve\":60,\"docs.search\":60,\"docs.tree\":60,\"docs.read\":60,\"fetch.content\":120,\"fetch.extract\":120,\"map.site\":180}",
+  "SMART_SEARCH_INTENT_ROUTER": "rules",
+  "SMART_SEARCH_RETRY_MAX_ATTEMPTS": "3",
+  "SMART_SEARCH_RETRY_MULTIPLIER": "1",
+  "SMART_SEARCH_RETRY_MAX_WAIT": "10",
+  "SMART_SEARCH_DEBUG": "false",
+  "SMART_SEARCH_LOG_LEVEL": "INFO",
+  "SMART_SEARCH_LOG_TO_FILE": "false",
+  "SSL_VERIFY": "true"
+}
