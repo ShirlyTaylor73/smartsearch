@@ -21,17 +21,37 @@ class FakeZReadClient:
 
     async def post(self, url, headers, json):
         self.__class__.calls.append({"url": url, "headers": headers, "json": json})
-        return self.__class__.response
+        if self.__class__.response is not None:
+            return self.__class__.response
+        request = httpx.Request("POST", url)
+        if json["method"] == "initialize":
+            return httpx.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": json["id"],
+                    "result": {
+                        "protocolVersion": "2024-11-05",
+                        "serverInfo": {"name": "zread-server", "version": "0.0.1"},
+                        "capabilities": {},
+                    },
+                },
+                headers={"mcp-session-id": "session-123", "content-type": "application/json"},
+                request=request,
+            )
+        if json["method"] == "notifications/initialized":
+            return httpx.Response(200, json={}, request=request)
+        return httpx.Response(
+            200,
+            json={"jsonrpc": "2.0", "id": json["id"], "result": {"content": [{"type": "text", "text": "### Result\nhttps://example.com"}]}},
+            request=request,
+        )
 
 
 @pytest.fixture(autouse=True)
 def reset_client(monkeypatch):
     FakeZReadClient.calls = []
-    FakeZReadClient.response = httpx.Response(
-        200,
-        json={"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "text", "text": "### Result\nhttps://example.com"}]}},
-        request=httpx.Request("POST", "https://open.bigmodel.cn/api/mcp/zread/mcp"),
-    )
+    FakeZReadClient.response = None
     monkeypatch.setattr("smart_search.providers.zhipu_mcp.httpx.AsyncClient", FakeZReadClient)
 
 
@@ -43,10 +63,24 @@ async def test_zread_tools_use_current_mcp_schema():
     await provider.read_file("owner/repo", "README.md")
 
     calls = FakeZReadClient.calls
-    assert [call["json"]["params"]["name"] for call in calls] == ["search_doc", "get_repo_structure", "read_file"]
-    assert calls[0]["json"]["params"]["arguments"] == {"repo_name": "owner/repo", "query": "安装", "language": "zh"}
-    assert calls[1]["json"]["params"]["arguments"] == {"repo_name": "owner/repo", "dir_path": "src"}
-    assert calls[2]["json"]["params"]["arguments"] == {"repo_name": "owner/repo", "file_path": "README.md"}
+    assert [call["json"]["method"] for call in calls] == [
+        "initialize",
+        "notifications/initialized",
+        "tools/call",
+        "initialize",
+        "notifications/initialized",
+        "tools/call",
+        "initialize",
+        "notifications/initialized",
+        "tools/call",
+    ]
+    tool_calls = [call for call in calls if call["json"]["method"] == "tools/call"]
+    assert [call["json"]["params"]["name"] for call in tool_calls] == ["search_doc", "get_repo_structure", "read_file"]
+    assert tool_calls[0]["json"]["params"]["arguments"] == {"repo_name": "owner/repo", "query": "安装", "language": "zh"}
+    assert tool_calls[1]["json"]["params"]["arguments"] == {"repo_name": "owner/repo", "dir_path": "src"}
+    assert tool_calls[2]["json"]["params"]["arguments"] == {"repo_name": "owner/repo", "file_path": "README.md"}
+    assert all(call["headers"]["Mcp-Session-Id"] == "session-123" for call in tool_calls)
+    assert all(call["headers"]["MCP-Protocol-Version"] == "2024-11-05" for call in tool_calls)
 
 
 @pytest.mark.asyncio
