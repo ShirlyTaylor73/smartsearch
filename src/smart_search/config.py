@@ -56,23 +56,9 @@ class Config:
         "CONTEXT7_API_KEY",
         "CONTEXT7_BASE_URL",
         "CONTEXT7_TIMEOUT_SECONDS",
-        "ZHIPU_API_KEY",
-        "ZHIPU_API_URL",
-        "ZHIPU_SEARCH_ENGINE",
-        "ZHIPU_TIMEOUT_SECONDS",
         "ZHIPU_MCP_API_KEY",
-        "ZHIPU_MCP_SEARCH_API_URL",
-        "ZHIPU_MCP_READER_API_URL",
         "ZHIPU_MCP_ZREAD_API_URL",
         "ZHIPU_MCP_TIMEOUT_SECONDS",
-        "JINA_API_KEY",
-        "JINA_READER_API_URL",
-        "JINA_RESPOND_WITH",
-        "JINA_TIMEOUT_SECONDS",
-        "TAVILY_API_KEY",
-        "TAVILY_API_URL",
-        "TAVILY_ENABLED",
-        "TAVILY_TIMEOUT_SECONDS",
         "FIRECRAWL_API_KEY",
         "FIRECRAWL_API_URL",
         "FIRECRAWL_TIMEOUT_SECONDS",
@@ -517,22 +503,6 @@ class Config:
         return normalized
 
     @property
-    def tavily_enabled(self) -> bool:
-        return (self._get_config_value("TAVILY_ENABLED", "true") or "true").lower() in ("true", "1", "yes")
-
-    @property
-    def tavily_api_url(self) -> str:
-        return self._get_config_value("TAVILY_API_URL", "https://api.tavily.com") or "https://api.tavily.com"
-
-    @property
-    def tavily_api_key(self) -> str | None:
-        return self._get_config_value("TAVILY_API_KEY")
-
-    @property
-    def tavily_timeout(self) -> float:
-        return float(self._get_config_value("TAVILY_TIMEOUT_SECONDS", "30") or "30")
-
-    @property
     def firecrawl_api_url(self) -> str:
         return self._get_config_value("FIRECRAWL_API_URL", "https://api.firecrawl.dev/v2") or "https://api.firecrawl.dev/v2"
 
@@ -627,38 +597,8 @@ class Config:
         return float(self._get_config_value("CONTEXT7_TIMEOUT_SECONDS", "30") or "30")
 
     @property
-    def zhipu_api_key(self) -> str | None:
-        return self._get_config_value("ZHIPU_API_KEY")
-
-    @property
-    def zhipu_api_url(self) -> str:
-        return self._get_config_value("ZHIPU_API_URL", "https://open.bigmodel.cn/api") or "https://open.bigmodel.cn/api"
-
-    @property
-    def zhipu_search_engine(self) -> str:
-        return self._get_config_value("ZHIPU_SEARCH_ENGINE", "search_std") or "search_std"
-
-    @property
-    def zhipu_timeout(self) -> float:
-        return float(self._get_config_value("ZHIPU_TIMEOUT_SECONDS", "30") or "30")
-
-    @property
     def zhipu_mcp_api_key(self) -> str | None:
         return self._get_config_value("ZHIPU_MCP_API_KEY")
-
-    @property
-    def zhipu_mcp_search_api_url(self) -> str:
-        return self._get_config_value(
-            "ZHIPU_MCP_SEARCH_API_URL",
-            "https://open.bigmodel.cn/api/mcp/web_search_prime/mcp",
-        ) or "https://open.bigmodel.cn/api/mcp/web_search_prime/mcp"
-
-    @property
-    def zhipu_mcp_reader_api_url(self) -> str:
-        return self._get_config_value(
-            "ZHIPU_MCP_READER_API_URL",
-            "https://open.bigmodel.cn/api/mcp/web_reader/mcp",
-        ) or "https://open.bigmodel.cn/api/mcp/web_reader/mcp"
 
     @property
     def zhipu_mcp_zread_api_url(self) -> str:
@@ -670,22 +610,6 @@ class Config:
     @property
     def zhipu_mcp_timeout(self) -> float:
         return float(self._get_config_value("ZHIPU_MCP_TIMEOUT_SECONDS", "30") or "30")
-
-    @property
-    def jina_api_key(self) -> str | None:
-        return self._get_config_value("JINA_API_KEY")
-
-    @property
-    def jina_reader_api_url(self) -> str:
-        return self._get_config_value("JINA_READER_API_URL", "https://r.jina.ai") or "https://r.jina.ai"
-
-    @property
-    def jina_respond_with(self) -> str:
-        return self._get_config_value("JINA_RESPOND_WITH", "") or ""
-
-    @property
-    def jina_timeout(self) -> float:
-        return float(self._get_config_value("JINA_TIMEOUT_SECONDS", "30") or "30")
 
     def get_config_info(self) -> dict:
         config_parameter_errors: list[str] = []

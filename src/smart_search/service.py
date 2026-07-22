@@ -8,144 +8,16 @@ from typing import Any
 import httpx
 
 from .config import config
-from .intent_router import (
-    CAPABILITY_UTTERANCES,
-    CURRENT_INTENT_KEYWORDS as ROUTER_CURRENT_INTENT_KEYWORDS,
-    DEFAULT_ROUTE_CALIBRATION_MODELS,
-    DEFAULT_SEMANTIC_CONFIDENCE_MARGIN,
-    DEFAULT_SEMANTIC_CONFIDENCE_THRESHOLD,
-    DOCS_INTENT_KEYWORDS as ROUTER_DOCS_INTENT_KEYWORDS,
-    FETCH_INTENT_KEYWORDS as ROUTER_FETCH_INTENT_KEYWORDS,
-    ROUTABLE_CAPABILITIES,
-    ROUTE_CALIBRATION_QUERIES,
-    IntentRouter,
-    build_rules_route,
-    extract_urls as router_extract_urls,
-    _classifier_can_add_capability,
-    _cosine_similarity,
-    _ordered_capabilities,
-    _semantic_summary,
-)
-from .logger import log_info
+from .intent_router import IntentRouter
 from .providers.context7 import Context7Provider
 from .providers.exa import ExaSearchProvider
 from .providers.firecrawl import FirecrawlProvider
-from .providers.jina import JinaReaderProvider
-from .providers.openai_compatible import OpenAICompatibleSearchProvider, get_local_time_info
+from .providers.openai_compatible import OpenAICompatibleSearchProvider
 from .providers.xai_responses import XAIResponsesSearchProvider
-from .providers.zhipu import ZhipuWebSearchProvider
 from .providers.zhipu_mcp import ZhipuMCPProvider
-from .sources import merge_sources, new_session_id, split_answer_and_sources
-from .utils import search_prompt
+from .sources import split_answer_and_sources
 
 
-_AVAILABLE_MODELS_CACHE: dict[tuple[str, str], list[str]] = {}
-_AVAILABLE_MODELS_LOCK = asyncio.Lock()
-SOURCE_PROVENANCE_WARNING = (
-    "extra_sources are retrieved in parallel and are not automatically used to verify generated content; "
-    "use fetch on key URLs for claim-level evidence."
-)
-MINIMUM_PROFILE_ERROR = (
-    "最低配置不满足：必须至少配置 main_search、docs_search、web_fetch 三类能力各一个 provider。"
-)
-OPENAI_COMPATIBLE_DIAGNOSE_COMMAND = "smart-search diagnose openai-compatible --format markdown"
-DOCS_INTENT_KEYWORDS = ROUTER_DOCS_INTENT_KEYWORDS
-ZH_CURRENT_KEYWORDS = ROUTER_CURRENT_INTENT_KEYWORDS
-FETCH_INTENT_KEYWORDS = ROUTER_FETCH_INTENT_KEYWORDS
-PROVIDER_PROFILES: dict[str, dict[str, Any]] = {
-    "xai-responses": {
-        "capability": "main_search",
-        "strengths": ["broad synthesis", "web_search", "x_search"],
-        "exclusions": ["evidence proof without fetch"],
-        "fallback_group": "main_search",
-        "minimum_profile_role": "main_search",
-        "quality_filters": ["source extraction required for high-risk claims"],
-        "route_reasons": ["broad live answer", "primary synthesis"],
-    },
-    "openai-compatible": {
-        "capability": "main_search",
-        "strengths": ["broad synthesis", "relay compatibility"],
-        "exclusions": ["xAI server tools"],
-        "fallback_group": "main_search",
-        "minimum_profile_role": "main_search",
-        "quality_filters": ["source extraction required for high-risk claims"],
-        "route_reasons": ["relay-compatible primary synthesis"],
-    },
-    "context7": {
-        "capability": "docs_search",
-        "strengths": ["library docs", "API docs", "framework docs", "versioned snippets"],
-        "exclusions": ["general news", "generic web facts"],
-        "fallback_group": "docs_search",
-        "minimum_profile_role": "docs_search",
-        "quality_filters": ["library id required", "content required before citation"],
-        "route_reasons": ["docs/API evidence", "framework reference"],
-    },
-    "exa": {
-        "capability": "docs_search",
-        "strengths": ["official domains", "papers", "product pages", "trusted low-noise discovery", "similar pages"],
-        "exclusions": ["default second hop for every high-risk claim"],
-        "fallback_group": "docs_search",
-        "minimum_profile_role": "docs_search",
-        "quality_filters": ["URL required", "fetch before proof citation"],
-        "route_reasons": ["official low-noise discovery", "paper/product discovery"],
-    },
-    "zhipu": {
-        "capability": "web_search",
-        "strengths": ["Chinese", "domestic China", "current", "policy", "announcements", "recency filters"],
-        "exclusions": ["web_fetch", "chat model selection"],
-        "fallback_group": "web_search",
-        "minimum_profile_role": "",
-        "quality_filters": ["URL required", "fetch before proof citation"],
-        "route_reasons": ["Chinese/current/policy discovery"],
-    },
-    "zhipu-mcp": {
-        "capability": "web_search",
-        "strengths": ["Coding Plan quota", "remote MCP web_search_prime"],
-        "exclusions": ["Zhipu REST Web Search API"],
-        "fallback_group": "web_search",
-        "minimum_profile_role": "",
-        "quality_filters": ["URL required", "fetch before proof citation"],
-        "route_reasons": ["Coding Plan quota web discovery"],
-    },
-    "tavily": {
-        "capability": "web_search",
-        "capabilities": ["web_search", "web_fetch", "site_map"],
-        "strengths": ["broad source discovery", "site map", "URL extract"],
-        "exclusions": ["docs semantic replacement"],
-        "fallback_group": "web_search/web_fetch/site_map",
-        "minimum_profile_role": "web_fetch",
-        "quality_filters": ["non-empty normalized result", "non-empty extracted content"],
-        "route_reasons": ["broad source discovery", "site map", "URL fetch"],
-    },
-    "jina": {
-        "capability": "web_fetch",
-        "strengths": ["known public URL", "PDF", "arXiv", "clean markdown", "ReaderLM-v2 with key"],
-        "exclusions": ["general search provider", "anonymous standard minimum profile"],
-        "fallback_group": "web_fetch",
-        "minimum_profile_role": "web_fetch_with_key",
-        "quality_filters": ["non-empty markdown", "challenge page rejection", "ReaderLM-v2 requires key"],
-        "route_reasons": ["known URL extraction", "PDF/arXiv extraction"],
-    },
-    "zhipu-mcp-reader": {
-        "capability": "web_fetch",
-        "strengths": ["Coding Plan quota", "remote MCP webReader"],
-        "exclusions": ["Zhipu REST Web Search API"],
-        "fallback_group": "web_fetch",
-        "minimum_profile_role": "",
-        "quality_filters": ["non-empty reader content"],
-        "route_reasons": ["Coding Plan quota page read"],
-    },
-    "firecrawl": {
-        "capability": "web_fetch",
-        "capabilities": ["web_search", "web_fetch"],
-        "strengths": ["robust scrape fallback", "JS-heavy pages", "dynamic pages", "OCR/PDF/structured extraction"],
-        "exclusions": ["docs semantic replacement"],
-        "fallback_group": "web_search/web_fetch",
-        "minimum_profile_role": "web_fetch",
-        "quality_filters": ["non-empty normalized result", "non-empty extracted content"],
-        "route_reasons": ["JS-heavy fetch", "dynamic/browser-like extraction", "robust fetch fallback"],
-    },
-}
 OPERATION_PROFILES: dict[str, dict[str, Any]] = {
     "search.answer": {"executor": "search_answer", "responsible_provider": "grok", "required_config": ["SMART_SEARCH_GROK_TRANSPORT"], "default_timeout": 120.0, "normalizer": "answer"},
     "search.sources": {"executor": "search_sources", "responsible_provider": "exa", "required_config": ["EXA_API_KEY"], "default_timeout": 30.0, "normalizer": "results"},
@@ -157,13 +29,15 @@ OPERATION_PROFILES: dict[str, dict[str, Any]] = {
     "fetch.extract": {"executor": "fetch_extract", "responsible_provider": "firecrawl", "required_config": ["FIRECRAWL_API_KEY"], "default_timeout": 90.0, "normalizer": "data"},
     "map.site": {"executor": "map_site_operation", "responsible_provider": "firecrawl", "required_config": ["FIRECRAWL_API_KEY"], "default_timeout": 150.0, "normalizer": "entries"},
 }
-MAIN_SEARCH_PROVIDER_ALIASES = {
-    "xai-responses": {"xai-responses", "xai", "grok", "grok-web-tools"},
-    "openai-compatible": {"openai-compatible", "openai", "chat-completions", "primary"},
+
+PROVIDER_PROFILES: dict[str, dict[str, Any]] = {
+    "xai-responses": {"operations": ["search.answer"], "transport": "xAI Responses"},
+    "openai-compatible": {"operations": ["search.answer"], "transport": "OpenAI-compatible"},
+    "exa": {"operations": ["search.sources"]},
+    "context7": {"operations": ["docs.resolve", "docs.search"]},
+    "zhipu-mcp-zread": {"operations": ["docs.search", "docs.tree", "docs.read"]},
+    "firecrawl": {"operations": ["fetch.content", "fetch.extract", "map.site"]},
 }
-MODEL_BREAKER_FAILURE_THRESHOLD = 2
-MODEL_BREAKER_COOLDOWN_SECONDS = 600.0
-_OPENAI_COMPATIBLE_MODEL_BREAKERS: dict[tuple[str, str], dict[str, Any]] = {}
 
 
 def _elapsed_ms(start: float) -> float:
@@ -173,263 +47,51 @@ def _elapsed_ms(start: float) -> float:
 def _normalize_domain_filter(value: str | list[str] | tuple[str, ...] | None) -> list[str] | None:
     if not value:
         return None
-
-    raw_parts = [value] if isinstance(value, str) else [str(item) for item in value if item]
-    domains: list[str] = []
-    for part in raw_parts:
-        domains.extend(item.strip() for item in re.split(r"[\s,]+", part) if item.strip())
-    return domains or None
-
-
-def _empty_search_result(
-    start: float,
-    session_id: str,
-    query: str,
-    error_type: str,
-    error: str,
-    primary_api_mode: str = "",
-    extra: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    data: dict[str, Any] = {
-        "ok": False,
-        "error_type": error_type,
-        "error": error,
-        "session_id": session_id,
-        "query": query,
-        "primary_api_mode": primary_api_mode,
-        "content": "",
-        "sources": [],
-        "sources_count": 0,
-        "primary_sources": [],
-        "primary_sources_count": 0,
-        "extra_sources": [],
-        "extra_sources_count": 0,
-        "source_warning": "",
-        "routing_decision": {},
-        "providers_used": [],
-        "provider_attempts": [],
-        "fallback_used": False,
-        "validation_level": "",
-        "elapsed_ms": _elapsed_ms(start),
-    }
-    if extra:
-        data.update(extra)
-    return data
+    raw = [value] if isinstance(value, str) else [str(item) for item in value if item]
+    result: list[str] = []
+    for part in raw:
+        result.extend(item.strip() for item in re.split(r"[\s,]+", part) if item.strip())
+    return result or None
 
 
-def _attempt(
-    capability: str,
-    provider: str,
-    status: str,
-    start: float,
-    result_count: int = 0,
-    error_type: str = "",
-    error: str = "",
-    extra: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    data = {
-        "capability": capability,
-        "provider": provider,
-        "status": status,
-        "error_type": error_type,
-        "error": error,
-        "elapsed_ms": _elapsed_ms(start),
-        "result_count": result_count,
-    }
-    if extra:
-        data.update(extra)
-    return data
-
-
-def _openai_model_breaker_key(api_url: str, model: str) -> tuple[str, str]:
-    return (api_url.rstrip("/"), model)
-
-
-def reset_runtime_breakers() -> None:
-    _OPENAI_COMPATIBLE_MODEL_BREAKERS.clear()
-
-
-def _openai_model_breaker_state(api_url: str, model: str) -> dict[str, Any]:
-    key = _openai_model_breaker_key(api_url, model)
-    state = _OPENAI_COMPATIBLE_MODEL_BREAKERS.get(key, {})
-    opened_until = float(state.get("opened_until") or 0.0)
-    now = time.monotonic()
-    if opened_until and opened_until > now:
-        return {
-            "state": "open",
-            "opened_until_seconds": round(opened_until - now, 3),
-            "consecutive_failures": int(state.get("consecutive_failures") or 0),
-        }
-    if opened_until and opened_until <= now:
-        _OPENAI_COMPATIBLE_MODEL_BREAKERS.pop(key, None)
-        state = {}
-    return {"state": "closed", "consecutive_failures": int(state.get("consecutive_failures") or 0)}
-
-
-def _record_openai_model_success(api_url: str, model: str) -> None:
-    _OPENAI_COMPATIBLE_MODEL_BREAKERS.pop(_openai_model_breaker_key(api_url, model), None)
-
-
-def _record_openai_model_failure(api_url: str, model: str) -> dict[str, Any]:
-    key = _openai_model_breaker_key(api_url, model)
-    state = _OPENAI_COMPATIBLE_MODEL_BREAKERS.setdefault(key, {"consecutive_failures": 0, "opened_until": 0.0})
-    state["consecutive_failures"] = int(state.get("consecutive_failures") or 0) + 1
-    if state["consecutive_failures"] >= MODEL_BREAKER_FAILURE_THRESHOLD:
-        state["opened_until"] = time.monotonic() + MODEL_BREAKER_COOLDOWN_SECONDS
-    return _openai_model_breaker_state(api_url, model)
-
-
-def _openai_model_candidates(provider_config: dict[str, Any], *, fallback_mode: str, model_override: str) -> list[dict[str, Any]]:
-    primary_model = provider_config["model"]
-    candidates = [
-        {
-            **provider_config,
-            "model": primary_model,
-            "model_role": "primary",
-            "fallback_from_model": "",
-            "stream": provider_config.get("stream", False),
-        }
-    ]
-    if fallback_mode == "off" or model_override:
-        return candidates
-    for fallback_model in provider_config.get("fallback_models") or []:
-        candidates.append(
-            {
-                **provider_config,
-                "model": fallback_model,
-                "model_role": "fallback",
-                "fallback_from_model": primary_model,
-                "stream": False,
-            }
-        )
-    return candidates
-
-
-def _remaining_budget_seconds(start: float, timeout_seconds: float | None) -> float | None:
-    if timeout_seconds is None:
-        return None
-    return max(0.0, float(timeout_seconds) - (time.time() - start))
-
-
-def _attempt_timeout_seconds(
-    search_start: float,
-    timeout_seconds: float | None,
-    remaining_candidates: int,
-) -> float | None:
-    remaining_budget = _remaining_budget_seconds(search_start, timeout_seconds)
-    if remaining_budget is None:
-        return None
-    if remaining_budget <= 0:
-        return 0.001
-    if remaining_candidates <= 1:
-        return max(0.001, remaining_budget)
-    return max(0.001, min(30.0, remaining_budget / 2.0))
-
-
-def _append_openai_transport_attempts(
-    provider_attempts: list[dict],
-    search_provider: Any,
-    candidate_config: dict[str, Any],
-) -> bool:
-    transport_attempts = getattr(search_provider, "last_transport_attempts", [])
-    if candidate_config.get("provider") != "openai-compatible" or not transport_attempts:
-        return False
-    for transport_attempt in transport_attempts:
-        transport_extra = {
-            key: value
-            for key, value in transport_attempt.items()
-            if key not in {"status", "error_type", "error", "elapsed_ms", "result_count"}
-        }
-        if candidate_config.get("fallback_from_model"):
-            transport_extra["fallback_from_model"] = candidate_config["fallback_from_model"]
-        provider_attempts.append(
-            {
-                **_attempt(
-                    "main_search",
-                    search_provider.get_provider_name(),
-                    transport_attempt.get("status", "error"),
-                    time.time(),
-                    result_count=int(transport_attempt.get("result_count") or 0),
-                    error_type=transport_attempt.get("error_type", ""),
-                    error=transport_attempt.get("error", ""),
-                ),
-                "elapsed_ms": transport_attempt.get("elapsed_ms", 0),
-                **transport_extra,
-            }
-        )
-    return True
-
-
-def _normalize_source_results(results: list[dict] | None, provider: str) -> list[dict]:
-    normalized: list[dict] = []
+def _normalize_source_results(results: list[dict] | None, provider: str) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
     for item in results or []:
-        url = (item.get("url") or item.get("link") or "").strip()
+        url = str(item.get("url") or item.get("link") or "").strip()
         if not url:
             continue
-        out = {"url": url, "provider": item.get("provider") or provider}
-        title = (item.get("title") or "").strip()
+        out: dict[str, Any] = {"url": url, "provider": item.get("provider") or provider}
+        title = str(item.get("title") or "").strip()
         if title:
             out["title"] = title
-        desc = (item.get("description") or item.get("content") or item.get("snippet") or "").strip()
-        if desc:
-            out["description"] = desc
-            out["snippet"] = desc
-        published = item.get("published_date") or item.get("publishedDate") or item.get("publish_date")
+        description = str(item.get("description") or item.get("content") or item.get("snippet") or "").strip()
+        if description:
+            out["description"] = description
+            out["snippet"] = description
+        published = item.get("published_date") or item.get("publishedDate")
         if published:
             out["published_date"] = published
-        source = item.get("source") or item.get("media")
-        if source:
-            out["source"] = source
+        if "text" in item:
+            out["text"] = item.get("text")
+        if "highlights" in item:
+            out["highlights"] = item.get("highlights")
         normalized.append(out)
     return normalized
-
-
-def _provider_names_from_attempts(attempts: list[dict]) -> list[str]:
-    names: list[str] = []
-    for attempt in attempts:
-        provider = attempt.get("provider")
-        if attempt.get("status") == "ok" and provider and provider not in names:
-            names.append(provider)
-    return names
-
-
-def _fallback_used(attempts: list[dict]) -> bool:
-    by_capability: dict[str, list[dict]] = {}
-    for attempt in attempts:
-        capability = attempt.get("capability", "")
-        if attempt.get("status") in {"ok", "empty", "error", "skipped"}:
-            by_capability.setdefault(capability, []).append(attempt)
-    for capability_attempts in by_capability.values():
-        previous_failed = False
-        previous_identity = ""
-        for attempt in capability_attempts:
-            provider = attempt.get("provider", "")
-            model = str(attempt.get("model") or "")
-            identity = f"{provider}:{model}" if provider == "OpenAI-compatible" and model else provider
-            status = attempt.get("status")
-            if previous_identity and identity and identity != previous_identity:
-                return True
-            if previous_failed and identity != previous_identity:
-                return True
-            previous_failed = status in {"empty", "error", "skipped"}
-            previous_identity = identity or previous_identity
-    return False
-
-
-def provider_profiles() -> dict[str, dict[str, Any]]:
-    return {provider: dict(profile) for provider, profile in PROVIDER_PROFILES.items()}
 
 
 def operation_profiles() -> dict[str, dict[str, Any]]:
     return {operation: dict(profile) for operation, profile in OPERATION_PROFILES.items()}
 
 
-def operation_policy(operation: str) -> dict[str, Any]:
+def provider_profiles() -> dict[str, dict[str, Any]]:
+    return {provider: dict(profile) for provider, profile in PROVIDER_PROFILES.items()}
+
+
+def operation_policy(operation: str) -> dict[str, float]:
     profile = OPERATION_PROFILES.get(operation)
     if not profile:
         raise ValueError(f"Unknown operation: {operation}")
-    timeout = config.operation_timeouts.get(operation, float(profile["default_timeout"]))
-    return {"timeout": timeout}
+    return {"timeout": config.operation_timeouts.get(operation, float(profile["default_timeout"]))}
 
 
 async def _await_operation(awaitable: Any, *, start: float, timeout: float) -> Any:
@@ -452,7 +114,7 @@ def _operation_envelope(
     extra: dict[str, Any] | None = None,
     debug: bool = False,
 ) -> dict[str, Any]:
-    data: dict[str, Any] = {
+    result: dict[str, Any] = {
         "ok": ok,
         "capability": capability,
         "operation": operation,
@@ -461,13 +123,13 @@ def _operation_envelope(
         "elapsed_ms": _elapsed_ms(start),
     }
     if not ok:
-        data.update({"error_type": error_type or "runtime_error", "error": error or "operation failed"})
+        result.update({"error_type": error_type or "provider_error", "error": error or "operation failed"})
     if extra:
-        data.update(extra)
+        result.update(extra)
     if not debug:
-        for key in ("provider_attempts", "providers_used", "routing_decision", "capability_status", "minimum_profile_ok", "fallback_used", "transport_fallback_used", "model_fallback_used"):
-            data.pop(key, None)
-    return data
+        result.pop("provider", None)
+        result.pop("provider_operation", None)
+    return result
 
 
 def _redact_sensitive(text: str) -> str:
@@ -503,1555 +165,17 @@ def _operation_exception(exc: BaseException) -> tuple[str, str]:
         return error_type, _redact_sensitive(f"HTTP {status}: {exc.response.text[:300]}")
     if isinstance(exc, httpx.RequestError):
         return "network_error", _redact_sensitive(str(exc))
+    if isinstance(exc, (json.JSONDecodeError, TypeError, KeyError)):
+        return "parse_error", _redact_sensitive(str(exc))
     return "provider_error", _redact_sensitive(str(exc))
 
 
-def intent_router_status() -> dict[str, Any]:
-    return IntentRouter(config).status()
-
-
-def _provider_supports_capability(provider: str, capability: str) -> bool:
-    profile = PROVIDER_PROFILES.get(provider, {})
-    capabilities = set(profile.get("capabilities") or [profile.get("capability", "")])
-    return capability in capabilities
-
-
-def _provider_configured(provider: str) -> bool:
-    if provider == "xai-responses":
-        return bool(config.xai_api_key)
-    if provider == "openai-compatible":
-        return bool(config.openai_compatible_api_url and config.openai_compatible_api_key)
-    if provider == "context7":
-        return bool(config.context7_api_key)
-    if provider == "exa":
-        return bool(config.exa_api_key)
-    if provider == "zhipu":
-        return bool(config.zhipu_api_key)
-    if provider == "zhipu-mcp":
-        return bool(config.zhipu_mcp_api_key)
-    if provider == "tavily":
-        return bool(config.tavily_api_key)
-    if provider == "jina":
-        return bool(config.jina_api_key)
-    if provider == "zhipu-mcp-reader":
-        return bool(config.zhipu_mcp_api_key)
-    if provider == "firecrawl":
-        return bool(config.firecrawl_api_key)
-    if provider == "main-search":
-        return bool(config.xai_api_key or (config.openai_compatible_api_url and config.openai_compatible_api_key))
-    return False
-
-
-def _extract_urls(query: str) -> list[str]:
-    return router_extract_urls(query)
-
-
-def get_capability_status() -> dict[str, Any]:
-    main_configured = _configured_main_search_provider_ids()
-    status = {
-        "main_search": {
-            "configured": main_configured,
-            "fallback_chain": MAIN_SEARCH_FALLBACK_CHAIN,
-            "ok": bool(main_configured),
-        },
-        "web_search": {
-            "configured": [
-                name
-                for name, enabled in [
-                    ("zhipu", bool(config.zhipu_api_key)),
-                    ("zhipu-mcp", bool(config.zhipu_mcp_api_key)),
-                    ("tavily", bool(config.tavily_api_key)),
-                    ("firecrawl", bool(config.firecrawl_api_key)),
-                ]
-                if enabled
-            ],
-            "fallback_chain": ["zhipu", "zhipu-mcp", "tavily", "firecrawl"],
-        },
-        "docs_search": {
-            "configured": [
-                name
-                for name, enabled in [
-                    ("context7", bool(config.context7_api_key)),
-                    ("exa", bool(config.exa_api_key)),
-                ]
-                if enabled
-            ],
-            "fallback_chain": ["context7", "exa"],
-        },
-        "web_fetch": {
-            "configured": [
-                name
-                for name, enabled in [
-                    ("tavily", bool(config.tavily_api_key)),
-                    ("jina", bool(config.jina_api_key)),
-                    ("zhipu-mcp-reader", bool(config.zhipu_mcp_api_key)),
-                    ("firecrawl", bool(config.firecrawl_api_key)),
-                ]
-                if enabled
-            ],
-            "fallback_chain": ["tavily", "jina", "zhipu-mcp-reader", "firecrawl"],
-        },
-    }
-    for capability in ("web_search", "docs_search", "web_fetch"):
-        status[capability]["ok"] = bool(status[capability]["configured"])
-    return status
-
-
-def _minimum_profile_result(profile: str, capability_status: dict[str, Any]) -> dict[str, Any]:
-    required = [] if profile == "off" else ["main_search", "docs_search", "web_fetch"]
-    missing = [capability for capability in required if not capability_status.get(capability, {}).get("ok")]
-    return {
-        "ok": not missing,
-        "error_type": "config_error" if missing else "",
-        "error": f"{MINIMUM_PROFILE_ERROR} 缺失能力: {', '.join(missing)}" if missing else "",
-        "profile": profile,
-        "required": required,
-        "missing": missing,
-        "capability_status": capability_status,
-    }
-
-
-def validate_minimum_profile() -> dict[str, Any]:
+async def _decode_provider_json(raw: str, provider: str) -> dict[str, Any]:
     try:
-        profile = config.minimum_profile
-    except ValueError as e:
-        return {"ok": False, "error_type": "parameter_error", "error": str(e), "missing": []}
-    return _minimum_profile_result(profile, get_capability_status())
-
-
-def _parse_provider_filter(providers: str = "auto") -> set[str] | None:
-    if not providers or providers.strip().lower() == "auto":
-        return None
-    return {item.strip().lower() for item in providers.split(",") if item.strip()}
-
-
-def _provider_allowed(provider_id: str, provider_filter: set[str] | None) -> bool:
-    if provider_filter is None:
-        return True
-    aliases = MAIN_SEARCH_PROVIDER_ALIASES.get(provider_id, {provider_id})
-    return bool(provider_filter.intersection(aliases))
-
-
-def _configured_main_search_provider_ids() -> list[str]:
-    configured: set[str] = set()
-
-    if config.xai_api_key:
-        configured.add("xai-responses")
-    if config.openai_compatible_api_url and config.openai_compatible_api_key:
-        configured.add("openai-compatible")
-
-    return [provider for provider in MAIN_SEARCH_FALLBACK_CHAIN if provider in configured]
-
-
-def _main_search_provider_configs(model_override: str = "", providers: str = "auto") -> list[dict[str, Any]]:
-    provider_filter = _parse_provider_filter(providers)
-    by_provider: dict[str, dict[str, Any]] = {}
-
-    if config.xai_api_key:
-        by_provider["xai-responses"] = {
-            "provider": "xai-responses",
-            "mode": "xai-responses",
-            "api_url": config.xai_api_url,
-            "api_key": config.xai_api_key,
-            "model": model_override or config.xai_model,
-            "tools": config.parse_xai_tools(config.xai_tools_raw),
-            "source": "XAI_*",
-        }
-
-    if config.openai_compatible_api_url and config.openai_compatible_api_key:
-        by_provider["openai-compatible"] = {
-            "provider": "openai-compatible",
-            "mode": "chat-completions",
-            "api_url": config.openai_compatible_api_url,
-            "api_key": config.openai_compatible_api_key,
-            "model": model_override or config.openai_compatible_model,
-            "fallback_models": [] if model_override else config.openai_compatible_fallback_models,
-            "stream": config.openai_compatible_stream,
-            "tools": [],
-            "source": "OPENAI_COMPATIBLE_*",
-        }
-
-    return [
-        by_provider[provider]
-        for provider in MAIN_SEARCH_FALLBACK_CHAIN
-        if provider in by_provider and _provider_allowed(provider, provider_filter)
-    ]
-
-
-def _main_search_providers(provider_configs: list[dict[str, Any]], fallback: str) -> list[Any]:
-    selected = provider_configs if fallback != "off" else provider_configs[:1]
-    providers: list[Any] = []
-    for provider_config in selected:
-        if provider_config["provider"] == "xai-responses":
-            providers.append(
-                XAIResponsesSearchProvider(
-                    provider_config["api_url"],
-                    provider_config["api_key"],
-                    provider_config["model"],
-                    provider_config["tools"],
-                )
-            )
-        else:
-            providers.append(
-                OpenAICompatibleSearchProvider(
-                    provider_config["api_url"],
-                    provider_config["api_key"],
-                    provider_config["model"],
-                    provider_config.get("stream", False),
-                )
-            )
-    return providers
-
-
-async def fetch_available_models(api_url: str, api_key: str) -> list[str]:
-    models_url = f"{api_url.rstrip('/')}/models"
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.get(
-            models_url,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
-
-    models: list[str] = []
-    for item in (data or {}).get("data", []) or []:
-        if isinstance(item, dict) and isinstance(item.get("id"), str):
-            models.append(item["id"])
-    return models
-
-
-async def get_available_models_cached(api_url: str, api_key: str) -> list[str]:
-    key = (api_url, api_key)
-    async with _AVAILABLE_MODELS_LOCK:
-        if key in _AVAILABLE_MODELS_CACHE:
-            return _AVAILABLE_MODELS_CACHE[key]
-
-    try:
-        models = await fetch_available_models(api_url, api_key)
-    except Exception:
-        models = []
-
-    async with _AVAILABLE_MODELS_LOCK:
-        _AVAILABLE_MODELS_CACHE[key] = models
-    return models
-
-
-def extra_results_to_sources(
-    tavily_results: list[dict] | None,
-    firecrawl_results: list[dict] | None,
-) -> list[dict]:
-    sources: list[dict] = []
-    seen: set[str] = set()
-
-    if firecrawl_results:
-        for r in firecrawl_results:
-            url = (r.get("url") or "").strip()
-            if not url or url in seen:
-                continue
-            seen.add(url)
-            item: dict = {"url": url, "provider": "firecrawl"}
-            title = (r.get("title") or "").strip()
-            if title:
-                item["title"] = title
-            desc = (r.get("description") or "").strip()
-            if desc:
-                item["description"] = desc
-            sources.append(item)
-
-    if tavily_results:
-        for r in tavily_results:
-            url = (r.get("url") or "").strip()
-            if not url or url in seen:
-                continue
-            seen.add(url)
-            item = {"url": url, "provider": "tavily"}
-            title = (r.get("title") or "").strip()
-            if title:
-                item["title"] = title
-            content = (r.get("content") or "").strip()
-            if content:
-                item["description"] = content
-            sources.append(item)
-
-    return sources
-
-
-async def _run_web_fetch_fallback(
-    url: str,
-    fallback: str = "auto",
-    preferred_order: list[str] | None = None,
-) -> tuple[dict[str, Any] | None, list[dict]]:
-    attempts: list[dict] = []
-    providers = []
-    if config.tavily_api_key:
-        providers.append("tavily")
-    if config.jina_api_key:
-        providers.append("jina")
-    if config.zhipu_mcp_api_key:
-        providers.append("zhipu-mcp-reader")
-    if config.firecrawl_api_key:
-        providers.append("firecrawl")
-    if preferred_order:
-        allowed = {provider for provider in providers}
-        providers = [provider for provider in preferred_order if provider in allowed]
-    if fallback == "off":
-        providers = providers[:1]
-
-    for provider in providers:
-        start = time.time()
-        try:
-            if provider == "tavily":
-                content = await call_tavily_extract(url)
-            elif provider == "jina":
-                data = await jina_fetch(url)
-                content = data.get("content") if data.get("ok") else None
-                if not data.get("ok"):
-                    status = "error" if data.get("error_type") in {"auth_error", "config_error", "parameter_error", "quality_error", "rate_limited", "timeout", "network_error", "runtime_error"} else "empty"
-                    attempts.append(_attempt("web_fetch", provider, status, start, error_type=data.get("error_type", ""), error=data.get("error", "")))
-                    continue
-            elif provider == "zhipu-mcp-reader":
-                data = await zhipu_mcp_reader(url)
-                content = data.get("content") if data.get("ok") else None
-                if not data.get("ok"):
-                    status = "error" if data.get("error_type") in {"auth_error", "config_error", "provider_error", "rate_limited", "timeout", "network_error", "runtime_error"} else "empty"
-                    attempts.append(_attempt("web_fetch", provider, status, start, error_type=data.get("error_type", ""), error=data.get("error", "")))
-                    continue
-            else:
-                content = await call_firecrawl_scrape(url)
-            if content and content.strip():
-                attempts.append(_attempt("web_fetch", provider, "ok", start, result_count=1))
-                return {
-                    "ok": True,
-                    "url": url,
-                    "provider": provider,
-                    "content": content,
-                }, attempts
-            attempts.append(_attempt("web_fetch", provider, "empty", start))
-        except Exception as e:
-            attempts.append(_attempt("web_fetch", provider, "error", start, error_type="runtime_error", error=str(e)))
-    return None, attempts
-
-
-async def _run_web_search_fallback(
-    query: str,
-    count: int = 5,
-    providers: str = "auto",
-    fallback: str = "auto",
-) -> tuple[list[dict], list[dict]]:
-    provider_filter = _parse_provider_filter(providers)
-    attempts: list[dict] = []
-    configured: list[str] = []
-    if config.zhipu_api_key:
-        configured.append("zhipu")
-    if config.zhipu_mcp_api_key:
-        configured.append("zhipu-mcp")
-    if config.tavily_api_key:
-        configured.append("tavily")
-    if config.firecrawl_api_key:
-        configured.append("firecrawl")
-    if provider_filter is not None:
-        configured = [p for p in configured if p in provider_filter]
-    if fallback == "off":
-        configured = configured[:1]
-
-    for provider in configured:
-        start = time.time()
-        try:
-            if provider == "zhipu":
-                data = await zhipu_search(query, count=count)
-                if data.get("ok"):
-                    sources = _normalize_source_results(data.get("results"), "zhipu")
-                    if sources:
-                        attempts.append(_attempt("web_search", provider, "ok", start, result_count=len(sources)))
-                        return sources, attempts
-                status = "error" if data.get("error_type") in {"rate_limited", "auth_error", "timeout", "network_error", "runtime_error"} else "empty"
-                attempts.append(_attempt("web_search", provider, status, start, error_type=data.get("error_type", ""), error=data.get("error", "")))
-            elif provider == "zhipu-mcp":
-                data = await zhipu_mcp_search(query, count=count)
-                if data.get("ok"):
-                    sources = _normalize_source_results(data.get("results"), "zhipu-mcp")
-                    if sources:
-                        attempts.append(_attempt("web_search", provider, "ok", start, result_count=len(sources)))
-                        return sources, attempts
-                status = "error" if data.get("error_type") in {"rate_limited", "auth_error", "timeout", "network_error", "runtime_error", "provider_error"} else "empty"
-                attempts.append(_attempt("web_search", provider, status, start, error_type=data.get("error_type", ""), error=data.get("error", "")))
-            elif provider == "tavily":
-                results = await call_tavily_search(query, count)
-                sources = _normalize_source_results(results, "tavily")
-                if sources:
-                    attempts.append(_attempt("web_search", provider, "ok", start, result_count=len(sources)))
-                    return sources, attempts
-                attempts.append(_attempt("web_search", provider, "empty", start))
-            elif provider == "firecrawl":
-                results = await call_firecrawl_search(query, count)
-                sources = _normalize_source_results(results, "firecrawl")
-                if sources:
-                    attempts.append(_attempt("web_search", provider, "ok", start, result_count=len(sources)))
-                    return sources, attempts
-                attempts.append(_attempt("web_search", provider, "empty", start))
-        except Exception as e:
-            attempts.append(_attempt("web_search", provider, "error", start, error_type="runtime_error", error=str(e)))
-    return [], attempts
-
-
-async def _run_docs_search_fallback(
-    query: str,
-    providers: str = "auto",
-    fallback: str = "auto",
-) -> tuple[list[dict], list[dict]]:
-    provider_filter = _parse_provider_filter(providers)
-    attempts: list[dict] = []
-    configured: list[str] = []
-    if config.context7_api_key:
-        configured.append("context7")
-    if config.exa_api_key:
-        configured.append("exa")
-    if provider_filter is not None:
-        configured = [p for p in configured if p in provider_filter]
-    if fallback == "off":
-        configured = configured[:1]
-
-    for provider in configured:
-        start = time.time()
-        try:
-            if provider == "exa":
-                data = await exa_search(query, num_results=5, include_highlights=True)
-                if data.get("ok"):
-                    sources = _normalize_source_results(data.get("results"), "exa")
-                    if sources:
-                        attempts.append(_attempt("docs_search", provider, "ok", start, result_count=len(sources)))
-                        return sources, attempts
-                status = "error" if data.get("error_type") in {"auth_error", "parameter_error", "rate_limited", "timeout", "network_error", "runtime_error"} else "empty"
-                attempts.append(_attempt("docs_search", provider, status, start, error_type=data.get("error_type", ""), error=data.get("error", "")))
-            elif provider == "context7":
-                data = await context7_library(query, query)
-                if data.get("ok"):
-                    sources = [
-                        {
-                            "url": f"context7:{item.get('id')}",
-                            "title": item.get("title") or item.get("id") or "Context7",
-                            "description": item.get("description") or "",
-                            "provider": "context7",
-                        }
-                        for item in data.get("results", [])
-                        if item.get("id")
-                    ]
-                    if sources:
-                        attempts.append(_attempt("docs_search", provider, "ok", start, result_count=len(sources)))
-                        return sources, attempts
-                status = "error" if data.get("error_type") in {"auth_error", "timeout", "network_error", "runtime_error"} else "empty"
-                attempts.append(_attempt("docs_search", provider, status, start, error_type=data.get("error_type", ""), error=data.get("error", "")))
-        except Exception as e:
-            attempts.append(_attempt("docs_search", provider, "error", start, error_type="runtime_error", error=str(e)))
-    return [], attempts
-
-
-async def call_tavily_extract(url: str) -> str | None:
-    api_key = config.tavily_api_key
-    if not api_key:
-        return None
-    endpoint = f"{config.tavily_api_url.rstrip('/')}/extract"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    body = {"urls": [url], "format": "markdown"}
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(endpoint, headers=headers, json=body)
-            response.raise_for_status()
-            data = response.json()
-            if data.get("results") and len(data["results"]) > 0:
-                content = data["results"][0].get("raw_content", "")
-                return content if content and content.strip() else None
-            return None
-    except Exception:
-        return None
-
-
-async def call_tavily_search(query: str, max_results: int = 6) -> list[dict] | None:
-    api_key = config.tavily_api_key
-    if not api_key:
-        return None
-    endpoint = f"{config.tavily_api_url.rstrip('/')}/search"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    body = {
-        "query": query,
-        "max_results": max_results,
-        "search_depth": "advanced",
-        "include_raw_content": False,
-        "include_answer": False,
-    }
-    try:
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            response = await client.post(endpoint, headers=headers, json=body)
-            response.raise_for_status()
-            data = response.json()
-            results = data.get("results", [])
-            return [
-                {
-                    "title": r.get("title", ""),
-                    "url": r.get("url", ""),
-                    "content": r.get("content", ""),
-                    "score": r.get("score", 0),
-                }
-                for r in results
-            ] if results else None
-    except Exception:
-        return None
-
-
-async def call_firecrawl_search(query: str, limit: int = 14) -> list[dict] | None:
-    api_key = config.firecrawl_api_key
-    if not api_key:
-        return None
-    endpoint = f"{config.firecrawl_api_url.rstrip('/')}/search"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    body = {"query": query, "limit": limit}
-    try:
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            response = await client.post(endpoint, headers=headers, json=body)
-            response.raise_for_status()
-            data = response.json()
-            results = data.get("data", {}).get("web", [])
-            return [
-                {
-                    "title": r.get("title", ""),
-                    "url": r.get("url", ""),
-                    "description": r.get("description", ""),
-                }
-                for r in results
-            ] if results else None
-    except Exception:
-        return None
-
-
-async def call_firecrawl_scrape(url: str, ctx=None) -> str | None:
-    api_key = config.firecrawl_api_key
-    if not api_key:
-        return None
-    endpoint = f"{config.firecrawl_api_url.rstrip('/')}/scrape"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    for attempt in range(config.retry_max_attempts):
-        body = {
-            "url": url,
-            "formats": ["markdown"],
-            "timeout": 60000,
-            "waitFor": (attempt + 1) * 1500,
-        }
-        try:
-            async with httpx.AsyncClient(timeout=90.0) as client:
-                response = await client.post(endpoint, headers=headers, json=body)
-                response.raise_for_status()
-                data = response.json()
-                markdown = data.get("data", {}).get("markdown", "")
-                if markdown and markdown.strip():
-                    return markdown
-                await log_info(ctx, f"Firecrawl: markdown为空, 重试 {attempt + 1}/{config.retry_max_attempts}", config.debug_enabled)
-        except Exception as e:
-            await log_info(ctx, f"Firecrawl error: {e}", config.debug_enabled)
-            return None
-    return None
-
-
-async def call_jina_reader(url: str) -> dict[str, Any]:
-    raw = await JinaReaderProvider(
-        config.jina_reader_api_url,
-        config.jina_api_key,
-        config.jina_respond_with,
-        config.jina_timeout,
-    ).fetch(url)
-    return await _decode_provider_json(raw, provider="jina")
-
-
-async def call_tavily_map(
-    url: str,
-    instructions: str = "",
-    max_depth: int = 1,
-    max_breadth: int = 20,
-    limit: int = 50,
-    timeout: int = 150,
-) -> dict[str, Any]:
-    api_key = config.tavily_api_key
-    if not api_key:
-        return {
-            "ok": False,
-            "error_type": "config_error",
-            "error": "TAVILY_API_KEY 未配置。请运行 `smart-search setup`，或使用 `smart-search config set TAVILY_API_KEY <key>`。",
-        }
-
-    endpoint = f"{config.tavily_api_url.rstrip('/')}/map"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    body = {"url": url, "max_depth": max_depth, "max_breadth": max_breadth, "limit": limit, "timeout": timeout}
-    if instructions:
-        body["instructions"] = instructions
-    try:
-        async with httpx.AsyncClient(timeout=float(timeout + 10)) as client:
-            response = await client.post(endpoint, headers=headers, json=body)
-            response.raise_for_status()
-            data = response.json()
-            return {
-                "ok": True,
-                "base_url": data.get("base_url", ""),
-                "results": data.get("results", []),
-                "response_time": data.get("response_time", 0),
-            }
-    except httpx.TimeoutException:
-        return {"ok": False, "error_type": "network_error", "error": f"映射超时: 请求超过{timeout}秒"}
-    except httpx.HTTPStatusError as e:
-        return {"ok": False, "error_type": "network_error", "error": f"HTTP错误: {e.response.status_code} - {e.response.text[:200]}"}
-    except Exception as e:
-        return {"ok": False, "error_type": "network_error", "error": f"映射错误: {str(e)}"}
-
-
-async def search(
-    query: str,
-    platform: str = "",
-    model: str = "",
-    extra_sources: int = 0,
-    validation: str = "",
-    fallback: str = "",
-    providers: str = "auto",
-    stream: bool | None = None,
-    timeout_seconds: float | None = None,
-    enforce_minimum_profile: bool = True,
-) -> dict[str, Any]:
-    start = time.time()
-    session_id = new_session_id()
-    try:
-        validation_level = (validation or config.validation_level).strip().lower()
-        fallback_mode = (fallback or config.fallback_mode).strip().lower()
-        if validation_level not in config._ALLOWED_VALIDATION_LEVELS:
-            raise ValueError(f"Invalid validation level: {validation_level}")
-        if fallback_mode not in config._ALLOWED_FALLBACK_MODES:
-            raise ValueError(f"Invalid fallback mode: {fallback_mode}")
-    except ValueError as e:
-        return _empty_search_result(start, session_id, query, "parameter_error", str(e))
-
-    minimum = validate_minimum_profile()
-    if enforce_minimum_profile and not minimum.get("ok"):
-        return _empty_search_result(
-            start,
-            session_id,
-            query,
-            minimum.get("error_type", "config_error"),
-            minimum.get("error", MINIMUM_PROFILE_ERROR),
-            extra={
-                "capability_status": minimum.get("capability_status", {}),
-                "minimum_profile_ok": False,
-                "validation_level": validation_level,
-            },
-        )
-
-    try:
-        main_provider_configs = _main_search_provider_configs(model_override=model, providers=providers)
-    except ValueError as e:
-        return _empty_search_result(start, session_id, query, "parameter_error", str(e), extra={"validation_level": validation_level})
-
-    if not main_provider_configs:
-        return _empty_search_result(
-            start,
-            session_id,
-            query,
-            "config_error",
-            "No configured main_search provider matches --providers.",
-            extra={
-                "validation_level": validation_level,
-                "capability_status": minimum.get("capability_status", {}),
-                "minimum_profile_ok": minimum.get("ok", False),
-            },
-        )
-
-    primary_api_mode = main_provider_configs[0]["mode"]
-    if stream is not None:
-        for provider_config in main_provider_configs:
-            if provider_config["provider"] == "openai-compatible":
-                provider_config["stream"] = stream
-
-    has_tavily = bool(config.tavily_api_key)
-    has_firecrawl = bool(config.firecrawl_api_key)
-    tavily_count = 0
-    firecrawl_count = 0
-    if extra_sources > 0:
-        if has_tavily and has_firecrawl:
-            tavily_count = max(1, round(extra_sources * 0.6))
-            firecrawl_count = extra_sources - tavily_count
-        elif has_tavily:
-            tavily_count = extra_sources
-        elif has_firecrawl:
-            firecrawl_count = extra_sources
-
-    selected_main_provider_configs = main_provider_configs if fallback_mode != "off" else main_provider_configs[:1]
-    try:
-        route_result = await IntentRouter(config).route(query, validation_level=validation_level, allow_remote=True)
-    except ValueError as e:
-        return _empty_search_result(start, session_id, query, "parameter_error", str(e), extra={"validation_level": validation_level})
-    fetch_urls = _extract_urls(query)
-    supplemental_paths = route_result.required_capabilities
-    openai_candidate_models = next(
-        (
-            [candidate["model"] for candidate in _openai_model_candidates(item, fallback_mode=fallback_mode, model_override=model)]
-            for item in selected_main_provider_configs
-            if item["provider"] == "openai-compatible"
-        ),
-        [],
-    )
-    routing_decision = {
-        **route_result.to_dict(),
-        "validation_level": validation_level,
-        "fallback_mode": fallback_mode,
-        "providers": providers,
-        "main_search_chain": [item["provider"] for item in selected_main_provider_configs],
-        "openai_compatible_stream": next((bool(item.get("stream")) for item in selected_main_provider_configs if item["provider"] == "openai-compatible"), False),
-        "openai_compatible_models": openai_candidate_models,
-        "openai_compatible_model_fallback_enabled": len(openai_candidate_models) > 1,
-    }
-
-    provider_attempts: list[dict] = []
-    primary_start = time.time()
-    primary_result = None
-    successful_main_config: dict[str, Any] | None = None
-    last_primary_error: dict[str, Any] | None = None
-    model_fallback_used = False
-    transport_fallback_used = False
-    total_main_candidates = sum(
-        len(_openai_model_candidates(item, fallback_mode=fallback_mode, model_override=model))
-        if item["provider"] == "openai-compatible"
-        else 1
-        for item in selected_main_provider_configs
-    )
-    completed_main_candidates = 0
-    for provider_config in selected_main_provider_configs:
-        provider_candidates = (
-            _openai_model_candidates(provider_config, fallback_mode=fallback_mode, model_override=model)
-            if provider_config["provider"] == "openai-compatible"
-            else [provider_config]
-        )
-        for candidate_config in provider_candidates:
-            completed_main_candidates += 1
-            primary_start = time.time()
-            search_provider = _main_search_providers([candidate_config], fallback="auto")[0]
-            attempt_extra: dict[str, Any] = {}
-            if candidate_config["provider"] == "openai-compatible":
-                attempt_extra["model"] = candidate_config["model"]
-                attempt_extra["model_role"] = candidate_config.get("model_role", "primary")
-                if candidate_config.get("fallback_from_model"):
-                    attempt_extra["fallback_from_model"] = candidate_config["fallback_from_model"]
-                    model_fallback_used = True
-                breaker_state = _openai_model_breaker_state(candidate_config["api_url"], candidate_config["model"])
-                if breaker_state.get("state") == "open":
-                    attempt_extra["breaker_state"] = breaker_state
-                    provider_attempts.append(
-                        _attempt(
-                            "main_search",
-                            "OpenAI-compatible",
-                            "skipped",
-                            primary_start,
-                            error_type="network_error",
-                            error="model breaker open",
-                            extra=attempt_extra,
-                        )
-                    )
-                    continue
-            attempt_timeout = _attempt_timeout_seconds(
-                start,
-                timeout_seconds,
-                total_main_candidates - completed_main_candidates + 1,
-            )
-            try:
-                if attempt_timeout is not None:
-                    candidate_result = await asyncio.wait_for(search_provider.search(query, platform), timeout=attempt_timeout)
-                else:
-                    candidate_result = await search_provider.search(query, platform)
-                transport_attempts = getattr(search_provider, "last_transport_attempts", [])
-                if _append_openai_transport_attempts(provider_attempts, search_provider, candidate_config):
-                    transport_fallback_used = transport_fallback_used or any(
-                        attempt.get("fallback_from_transport") for attempt in transport_attempts
-                    )
-                if candidate_result:
-                    primary_result = candidate_result
-                    successful_main_config = candidate_config
-                    if candidate_config["provider"] != "openai-compatible" or not transport_attempts:
-                        provider_attempts.append(
-                            _attempt(
-                                "main_search",
-                                search_provider.get_provider_name(),
-                                "ok",
-                                primary_start,
-                                result_count=1,
-                                extra=attempt_extra,
-                            )
-                        )
-                    if candidate_config["provider"] == "openai-compatible":
-                        _record_openai_model_success(candidate_config["api_url"], candidate_config["model"])
-                    break
-                if candidate_config["provider"] == "openai-compatible":
-                    attempt_extra["breaker_state"] = _record_openai_model_failure(candidate_config["api_url"], candidate_config["model"])
-                last_primary_error = _primary_search_error_result(
-                    start,
-                    session_id,
-                    query,
-                    candidate_config["mode"],
-                    "network_error",
-                    f"{search_provider.get_provider_name()} 返回空结果",
-                )
-                if candidate_config["provider"] != "openai-compatible" or not transport_attempts:
-                    provider_attempts.append(
-                        _attempt("main_search", search_provider.get_provider_name(), "empty", primary_start, extra=attempt_extra)
-                    )
-            except Exception as e:
-                error_result = _primary_search_exception_result(start, session_id, query, candidate_config["mode"], search_provider.get_provider_name(), e)
-                last_primary_error = error_result
-                transport_attempts = getattr(search_provider, "last_transport_attempts", [])
-                if _append_openai_transport_attempts(provider_attempts, search_provider, candidate_config):
-                    transport_fallback_used = transport_fallback_used or any(
-                        attempt.get("fallback_from_transport") for attempt in transport_attempts
-                    )
-                if candidate_config["provider"] == "openai-compatible":
-                    attempt_extra["breaker_state"] = _record_openai_model_failure(candidate_config["api_url"], candidate_config["model"])
-                if candidate_config["provider"] != "openai-compatible" or not transport_attempts:
-                    provider_attempts.append(
-                        _attempt(
-                            "main_search",
-                            search_provider.get_provider_name(),
-                            "error",
-                            primary_start,
-                            error_type=error_result["error_type"],
-                            error=error_result["error"],
-                            extra=attempt_extra,
-                        )
-                    )
-        if primary_result is not None:
-            break
-    if primary_result is None:
-        result = last_primary_error or _primary_search_error_result(start, session_id, query, primary_api_mode, "network_error", "搜索失败或无结果")
-        result["provider_attempts"] = provider_attempts
-        result["providers_used"] = _provider_names_from_attempts(provider_attempts)
-        result["fallback_used"] = _fallback_used(provider_attempts)
-        result["transport_fallback_used"] = transport_fallback_used
-        result["model_fallback_used"] = model_fallback_used
-        result["routing_decision"] = routing_decision
-        result["validation_level"] = validation_level
-        result["minimum_profile_ok"] = minimum.get("ok", False)
-        result["capability_status"] = minimum.get("capability_status", {})
-        return result
-
-    successful_main_config = successful_main_config or selected_main_provider_configs[0]
-    primary_api_mode = successful_main_config["mode"]
-    effective_model = successful_main_config["model"]
-
-    coros: list[Any] = []
-    if tavily_count:
-        coros.append(call_tavily_search(query, tavily_count))
-    if firecrawl_count:
-        coros.append(call_firecrawl_search(query, firecrawl_count))
-
-    gathered = await asyncio.gather(*coros, return_exceptions=True)
-    primary_result = primary_result or ""
-    tavily_results: list[dict] | None = None
-    firecrawl_results: list[dict] | None = None
-    idx = 0
-    if tavily_count:
-        tavily_results = None if isinstance(gathered[idx], BaseException) else gathered[idx]
-        idx += 1
-    if firecrawl_count:
-        firecrawl_results = None if isinstance(gathered[idx], BaseException) else gathered[idx]
-
-    answer, primary_sources = split_answer_and_sources(primary_result)
-    extra_source_items = extra_results_to_sources(tavily_results, firecrawl_results)
-    for item_provider, results in (("tavily", tavily_results), ("firecrawl", firecrawl_results)):
-        if results:
-            provider_attempts.append(_attempt("web_search", item_provider, "ok", start, result_count=len(results)))
-
-    supplemental_sources: list[dict] = []
-    if validation_level in {"balanced", "strict"}:
-        if "docs_search" in supplemental_paths:
-            docs_sources, docs_attempts = await _run_docs_search_fallback(query, providers=providers, fallback=fallback_mode)
-            provider_attempts.extend(docs_attempts)
-            supplemental_sources.extend(docs_sources)
-        if "web_search" in supplemental_paths:
-            web_sources, web_attempts = await _run_web_search_fallback(query, count=max(1, extra_sources or 3), providers=providers, fallback=fallback_mode)
-            provider_attempts.extend(web_attempts)
-            supplemental_sources.extend(web_sources)
-        if "web_fetch" in supplemental_paths:
-            fetch_url = fetch_urls[0] if fetch_urls else query.strip()
-            fetch_result, fetch_attempts = await _run_web_fetch_fallback(fetch_url, fallback=fallback_mode)
-            provider_attempts.extend(fetch_attempts)
-            if fetch_result:
-                supplemental_sources.append({"url": fetch_result["url"], "provider": fetch_result["provider"], "description": fetch_result["content"][:300]})
-
-    extra_source_items = merge_sources(extra_source_items, supplemental_sources)
-    sources = merge_sources(primary_sources, extra_source_items)
-    ok = bool(answer or sources)
-    if validation_level == "strict" and not sources:
-        ok = False
-    return {
-        "ok": ok,
-        "error_type": "" if ok else ("evidence_error" if validation_level == "strict" else "network_error"),
-        "error": "" if ok else ("strict 模式证据不足" if validation_level == "strict" else "搜索失败或无结果"),
-        "session_id": session_id,
-        "query": query,
-        "platform": platform,
-        "model": effective_model,
-        "primary_api_mode": primary_api_mode,
-        "content": answer,
-        "sources": sources,
-        "sources_count": len(sources),
-        "primary_sources": primary_sources,
-        "primary_sources_count": len(primary_sources),
-        "extra_sources": extra_source_items,
-        "extra_sources_count": len(extra_source_items),
-        "source_warning": SOURCE_PROVENANCE_WARNING if extra_source_items else "",
-        "routing_decision": routing_decision,
-        "providers_used": _provider_names_from_attempts(provider_attempts),
-        "provider_attempts": provider_attempts,
-        "fallback_used": _fallback_used(provider_attempts),
-        "transport_fallback_used": transport_fallback_used,
-        "model_fallback_used": model_fallback_used,
-        "validation_level": validation_level,
-        "minimum_profile_ok": minimum.get("ok", False),
-        "capability_status": minimum.get("capability_status", {}),
-        "elapsed_ms": _elapsed_ms(start),
-    }
-
-
-async def route(
-    query: str,
-    validation: str = "",
-    mode: str = "",
-    allow_remote: bool = True,
-) -> dict[str, Any]:
-    start = time.time()
-    try:
-        validation_level = (validation or config.validation_level).strip().lower()
-        if validation_level not in config._ALLOWED_VALIDATION_LEVELS:
-            raise ValueError(f"Invalid validation level: {validation_level}")
-        route_result = await IntentRouter(config).route(
-            query,
-            validation_level=validation_level,
-            mode=mode,
-            allow_remote=allow_remote,
-        )
-    except ValueError as e:
-        return {
-            "ok": False,
-            "query": query,
-            "error_type": "parameter_error",
-            "error": str(e),
-            "elapsed_ms": _elapsed_ms(start),
-        }
-    data = route_result.to_dict()
-    router_status = intent_router_status()
-    preset_fields = {
-        key: router_status.get(key)
-        for key in (
-            "embedding_preset_id",
-            "embedding_preset_model",
-            "embedding_preset_api_url",
-            "embedding_preset_threshold",
-            "embedding_preset_margin",
-            "embedding_preset_threshold_matches",
-            "embedding_preset_margin_matches",
-            "embedding_preset_recommended",
-            "embedding_preset_recommendation",
-            "embedding_preset_commands",
-        )
-        if key in router_status
-    }
-    data.update(
-        {
-            "ok": True,
-            "query": query,
-            "validation_level": validation_level,
-            "executed_search": False,
-            "provider_selection": "not_executed",
-            "embedding_model": router_status.get("embedding_model", ""),
-            "embedding_threshold": router_status.get("embedding_threshold", ""),
-            "embedding_margin": router_status.get("embedding_margin", ""),
-            "embedding_threshold_source": router_status.get("embedding_threshold_source", ""),
-            "embedding_margin_source": router_status.get("embedding_margin_source", ""),
-            "elapsed_ms": _elapsed_ms(start),
-            **preset_fields,
-        }
-    )
-    return data
-
-
-class _CalibrationConfigProxy:
-    def __init__(self, base_config: Any, model: str, threshold: float, margin: float):
-        self._base_config = base_config
-        self._model = model
-        self._threshold = threshold
-        self._margin = margin
-
-    @property
-    def intent_router_mode(self) -> str:
-        return "hybrid"
-
-    @property
-    def intent_embedding_model(self) -> str:
-        return self._model
-
-    @property
-    def intent_embedding_threshold(self) -> float:
-        return self._threshold
-
-    @property
-    def intent_embedding_margin(self) -> float:
-        return self._margin
-
-    def get_config_source(self, key: str) -> str:
-        if key in {"INTENT_EMBEDDING_MODEL", "INTENT_EMBEDDING_THRESHOLD", "INTENT_EMBEDDING_MARGIN"}:
-            return "calibration"
-        getter = getattr(self._base_config, "get_config_source", None)
-        if callable(getter):
-            return str(getter(key))
-        return "default"
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._base_config, name)
-
-
-def _dedupe_preserve_order(values: list[str]) -> list[str]:
-    seen: set[str] = set()
-    out: list[str] = []
-    for value in values:
-        item = value.strip()
-        if item and item not in seen:
-            seen.add(item)
-            out.append(item)
-    return out
-
-
-def _parse_calibration_models(models: str = "") -> list[str]:
-    if models.strip():
-        return _dedupe_preserve_order([item.strip() for item in models.split(",")])
-    defaults = list(DEFAULT_ROUTE_CALIBRATION_MODELS)
-    current = config.intent_embedding_model
-    if current:
-        defaults.append(current)
-    return _dedupe_preserve_order(defaults)
-
-
-def _configured_embedding_threshold() -> float:
-    try:
-        return config.intent_embedding_threshold
-    except ValueError:
-        return DEFAULT_SEMANTIC_CONFIDENCE_THRESHOLD
-
-
-def _configured_embedding_margin() -> float:
-    try:
-        return config.intent_embedding_margin
-    except ValueError:
-        return DEFAULT_SEMANTIC_CONFIDENCE_MARGIN
-
-
-def _route_calibration_dataset() -> list[dict[str, Any]]:
-    examples: list[dict[str, Any]] = []
-    for label, queries in ROUTE_CALIBRATION_QUERIES.items():
-        expected = [] if label == "none" else [label]
-        for index, query_text in enumerate(queries, 1):
-            examples.append(
-                {
-                    "id": f"{label}-{index:02d}",
-                    "query": query_text,
-                    "expected_capabilities": list(expected),
-                    "expected_label": label,
-                }
-            )
-    return examples
-
-
-async def _embed_in_batches(router: IntentRouter, inputs: list[str], batch_size: int = 64) -> list[list[float]]:
-    embeddings: list[list[float]] = []
-    for start_index in range(0, len(inputs), batch_size):
-        embeddings.extend(await router._embed(inputs[start_index : start_index + batch_size]))
-    return embeddings
-
-
-def _label_present(capabilities: set[str], label: str) -> bool:
-    if label == "none":
-        return not capabilities
-    return label in capabilities
-
-
-def _macro_f1(expected: list[set[str]], predicted: list[set[str]], labels: list[str]) -> dict[str, Any]:
-    per_label: dict[str, float] = {}
-    for label in labels:
-        true_positive = 0
-        false_positive = 0
-        false_negative = 0
-        for expected_caps, predicted_caps in zip(expected, predicted):
-            expected_has = _label_present(expected_caps, label)
-            predicted_has = _label_present(predicted_caps, label)
-            if expected_has and predicted_has:
-                true_positive += 1
-            elif not expected_has and predicted_has:
-                false_positive += 1
-            elif expected_has and not predicted_has:
-                false_negative += 1
-        precision = true_positive / (true_positive + false_positive) if true_positive + false_positive else 0.0
-        recall = true_positive / (true_positive + false_negative) if true_positive + false_negative else 0.0
-        per_label[label] = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
-    macro = sum(per_label.values()) / len(labels) if labels else 0.0
-    return {
-        "macro_f1": round(macro, 4),
-        "per_label_f1": {label: round(score, 4) for label, score in per_label.items()},
-    }
-
-
-def _confusion_label(capabilities: set[str]) -> str:
-    ordered = _ordered_capabilities(capabilities)
-    if not ordered:
-        return "none"
-    if len(ordered) == 1:
-        return ordered[0]
-    return "+".join(ordered)
-
-
-def _confusion_matrix(expected: list[set[str]], predicted: list[set[str]]) -> dict[str, dict[str, int]]:
-    matrix: dict[str, dict[str, int]] = {}
-    for expected_caps, predicted_caps in zip(expected, predicted):
-        actual = _confusion_label(expected_caps)
-        guessed = _confusion_label(predicted_caps)
-        matrix.setdefault(actual, {})
-        matrix[actual][guessed] = matrix[actual].get(guessed, 0) + 1
-    return matrix
-
-
-def _semantic_predictions(
-    records: list[dict[str, Any]],
-    threshold: float,
-    margin: float,
-) -> tuple[list[set[str]], list[dict[str, Any]]]:
-    predictions: list[set[str]] = []
-    summaries: list[dict[str, Any]] = []
-    for record in records:
-        summary = _semantic_summary(record["scores"], threshold, margin)
-        summaries.append(summary)
-        if summary["passed_threshold"] and summary["passed_margin"]:
-            predictions.append({str(summary["top_capability"])})
-        else:
-            predictions.append(set())
-    return predictions, summaries
-
-
-def _candidate_thresholds(records: list[dict[str, Any]]) -> list[float]:
-    values = {round(index / 100, 2) for index in range(50, 96)}
-    values.add(round(_configured_embedding_threshold(), 2))
-    for record in records:
-        summary = _semantic_summary(record["scores"], 0.0, 0.0)
-        top_score = float(summary["top_score"])
-        for delta in (-0.02, -0.01, 0.0, 0.01, 0.02):
-            value = max(0.0, min(1.0, top_score + delta))
-            values.add(round(value, 3))
-    return sorted(values)
-
-
-def _candidate_margins(records: list[dict[str, Any]]) -> list[float]:
-    values = {round(index / 100, 2) for index in range(0, 21)}
-    values.add(round(_configured_embedding_margin(), 2))
-    for record in records:
-        summary = _semantic_summary(record["scores"], 0.0, 0.0)
-        score_margin = float(summary["margin"])
-        for delta in (-0.02, -0.01, 0.0, 0.01, 0.02):
-            value = max(0.0, min(1.0, score_margin + delta))
-            values.add(round(value, 3))
-    return sorted(values)
-
-
-def _select_semantic_parameters(
-    records: list[dict[str, Any]],
-    expected: list[set[str]],
-    labels: list[str],
-) -> dict[str, Any]:
-    best: dict[str, Any] | None = None
-    thresholds = _candidate_thresholds(records)
-    margins = _candidate_margins(records)
-    for threshold in thresholds:
-        for margin in margins:
-            predictions, _ = _semantic_predictions(records, threshold, margin)
-            metrics = _macro_f1(expected, predictions, labels)
-            failures = sum(1 for left, right in zip(expected, predictions) if left != right)
-            candidate = {
-                "threshold": threshold,
-                "margin": margin,
-                "macro_f1": metrics["macro_f1"],
-                "per_label_f1": metrics["per_label_f1"],
-                "failures": failures,
-            }
-            if best is None:
-                best = candidate
-                continue
-            current_key = (candidate["macro_f1"], -candidate["failures"], candidate["threshold"], candidate["margin"])
-            best_key = (best["macro_f1"], -best["failures"], best["threshold"], best["margin"])
-            if current_key > best_key:
-                best = candidate
-    return best or {
-        "threshold": _configured_embedding_threshold(),
-        "margin": _configured_embedding_margin(),
-        "macro_f1": 0.0,
-        "per_label_f1": {},
-        "failures": len(records),
-    }
-
-
-def _representative_failures(
-    records: list[dict[str, Any]],
-    expected: list[set[str]],
-    predicted: list[set[str]],
-    summaries: list[dict[str, Any]],
-    limit: int = 12,
-) -> list[dict[str, Any]]:
-    failures: list[dict[str, Any]] = []
-    for record, expected_caps, predicted_caps, summary in zip(records, expected, predicted, summaries):
-        if expected_caps == predicted_caps:
-            continue
-        rounded_scores = {
-            capability: round(float(score), 4)
-            for capability, score in sorted(record["scores"].items(), key=lambda item: item[0])
-        }
-        failures.append(
-            {
-                "id": record["case"]["id"],
-                "query": record["case"]["query"],
-                "expected": _confusion_label(expected_caps),
-                "predicted": _confusion_label(predicted_caps),
-                "top_capability": summary["top_capability"],
-                "top_score": round(float(summary["top_score"]), 4),
-                "second_score": round(float(summary["second_score"]), 4),
-                "margin": round(float(summary["margin"]), 4),
-                "scores": rounded_scores,
-            }
-        )
-        if len(failures) >= limit:
-            break
-    return failures
-
-
-async def _full_route_predictions(
-    records: list[dict[str, Any]],
-    threshold: float,
-    margin: float,
-    model: str,
-) -> tuple[list[set[str]], list[dict[str, Any]], list[dict[str, Any]]]:
-    proxy = _CalibrationConfigProxy(config, model, threshold, margin)
-    router = IntentRouter(proxy)
-    predictions: list[set[str]] = []
-    summaries: list[dict[str, Any]] = []
-    component_failures: list[dict[str, Any]] = []
-    for record in records:
-        query_text = record["case"]["query"]
-        rules = build_rules_route(query_text, validation_level="balanced", mode="hybrid")
-        merged_caps = set(rules.required_capabilities)
-        summary = _semantic_summary(record["scores"], threshold, margin)
-        summaries.append(summary)
-        semantic = {"scores": record["scores"], **summary}
-        if summary["passed_threshold"] and summary["passed_margin"]:
-            merged_caps.add(str(summary["top_capability"]))
-        if router._classifier_configured():
-            try:
-                classifier = await router._classifier_route(query_text, rules.to_dict(), semantic)
-                for capability in classifier.get("required_capabilities") or []:
-                    if capability in ROUTABLE_CAPABILITIES and _classifier_can_add_capability(capability, rules):
-                        merged_caps.add(str(capability))
-            except Exception as exc:
-                if len(component_failures) < 10:
-                    component_failures.append(
-                        {
-                            "id": record["case"]["id"],
-                            "query": query_text,
-                            "component": "classifier",
-                            "error": str(exc),
-                        }
-                    )
-        predictions.append(set(_ordered_capabilities(merged_caps)))
-    return predictions, summaries, component_failures
-
-
-def _model_failure_result(model: str, start: float, error: str, error_type: str = "provider_error") -> dict[str, Any]:
-    return {
-        "model": model,
-        "ok": False,
-        "availability": "failed",
-        "error_type": error_type,
-        "error": error,
-        "dimension": 0,
-        "latency_ms": 0.0,
-        "semantic_macro_f1": 0.0,
-        "full_route_macro_f1": 0.0,
-        "recommended_threshold": None,
-        "recommended_margin": None,
-        "confusion_matrix": {},
-        "semantic_failures": [],
-        "full_route_failures": [],
-        "elapsed_ms": _elapsed_ms(start),
-    }
-
-
-async def _evaluate_calibration_model(model: str, dataset: list[dict[str, Any]], labels: list[str]) -> dict[str, Any]:
-    start = time.time()
-    proxy = _CalibrationConfigProxy(
-        config,
-        model,
-        _configured_embedding_threshold(),
-        _configured_embedding_margin(),
-    )
-    router = IntentRouter(proxy)
-    if not router._embeddings_configured():
-        return _model_failure_result(
-            model,
-            start,
-            "INTENT_EMBEDDING_API_URL and INTENT_EMBEDDING_API_KEY must be configured before calibration.",
-            "config_error",
-        )
-
-    utterances: list[tuple[str, str]] = []
-    for capability, examples in CAPABILITY_UTTERANCES.items():
-        for example in examples:
-            utterances.append((capability, example))
-    inputs = [item["query"] for item in dataset] + [example for _capability, example in utterances]
-    embed_start = time.time()
-    embeddings = await _embed_in_batches(router, inputs)
-    latency_ms = _elapsed_ms(embed_start)
-    if len(embeddings) != len(inputs):
-        return _model_failure_result(
-            model,
-            start,
-            f"Embedding response returned {len(embeddings)} rows for {len(inputs)} inputs.",
-        )
-    dimension = len(embeddings[0]) if embeddings else 0
-    query_embeddings = embeddings[: len(dataset)]
-    utterance_embeddings = embeddings[len(dataset) :]
-
-    records: list[dict[str, Any]] = []
-    for item, query_embedding in zip(dataset, query_embeddings):
-        scores: dict[str, float] = {}
-        for index, (capability, _example) in enumerate(utterances):
-            score = _cosine_similarity(query_embedding, utterance_embeddings[index])
-            scores[capability] = max(scores.get(capability, 0.0), score)
-        records.append({"case": item, "scores": scores})
-
-    expected = [set(item["expected_capabilities"]) for item in dataset]
-    best = _select_semantic_parameters(records, expected, labels)
-    semantic_predictions, semantic_summaries = _semantic_predictions(records, best["threshold"], best["margin"])
-    semantic_metrics = _macro_f1(expected, semantic_predictions, labels)
-    full_predictions, full_summaries, component_failures = await _full_route_predictions(
-        records,
-        best["threshold"],
-        best["margin"],
-        model,
-    )
-    full_metrics = _macro_f1(expected, full_predictions, labels)
-
-    return {
-        "model": model,
-        "ok": True,
-        "availability": "ok",
-        "dimension": dimension,
-        "latency_ms": latency_ms,
-        "semantic_macro_f1": semantic_metrics["macro_f1"],
-        "semantic_per_label_f1": semantic_metrics["per_label_f1"],
-        "full_route_macro_f1": full_metrics["macro_f1"],
-        "full_route_per_label_f1": full_metrics["per_label_f1"],
-        "recommended_threshold": round(float(best["threshold"]), 3),
-        "recommended_margin": round(float(best["margin"]), 3),
-        "recommendation_basis": "semantic_macro_f1",
-        "confusion_matrix": _confusion_matrix(expected, semantic_predictions),
-        "full_route_confusion_matrix": _confusion_matrix(expected, full_predictions),
-        "semantic_failures": _representative_failures(records, expected, semantic_predictions, semantic_summaries),
-        "full_route_failures": _representative_failures(records, expected, full_predictions, full_summaries),
-        "component_failures": component_failures,
-        "elapsed_ms": _elapsed_ms(start),
-    }
-
-
-async def route_calibrate(models: str = "") -> dict[str, Any]:
-    start = time.time()
-    selected_models = _parse_calibration_models(models)
-    dataset = _route_calibration_dataset()
-    labels = [*sorted(ROUTABLE_CAPABILITIES), "none"]
-    results: list[dict[str, Any]] = []
-    for model in selected_models:
-        try:
-            results.append(await _evaluate_calibration_model(model, dataset, labels))
-        except Exception as exc:
-            results.append(_model_failure_result(model, start, str(exc)))
-
-    successful = [item for item in results if item.get("ok")]
-    failed_models = [item.get("model") for item in results if not item.get("ok")]
-    recommended = None
-    if successful:
-        recommended = max(
-            successful,
-            key=lambda item: (
-                float(item.get("semantic_macro_f1") or 0.0),
-                float(item.get("full_route_macro_f1") or 0.0),
-                -float(item.get("latency_ms") or 0.0),
-            ),
-        )
-    ok = bool(successful)
-    data: dict[str, Any] = {
-        "ok": ok,
-        "metric": "semantic_macro_f1",
-        "primary_metric": "semantic_macro_f1",
-        "full_route_metric_role": "validation",
-        "models": selected_models,
-        "model_results": results,
-        "failed_models": failed_models,
-        "dataset_size": len(dataset),
-        "dataset_counts": {label: len(queries) for label, queries in ROUTE_CALIBRATION_QUERIES.items()},
-        "capabilities": sorted(ROUTABLE_CAPABILITIES),
-        "labels": labels,
-        "default_threshold": _configured_embedding_threshold(),
-        "default_margin": _configured_embedding_margin(),
-        "embedding_model": config.intent_embedding_model,
-        "recommended_model": recommended.get("model") if recommended else "",
-        "recommended_threshold": recommended.get("recommended_threshold") if recommended else None,
-        "recommended_margin": recommended.get("recommended_margin") if recommended else None,
-        "elapsed_ms": _elapsed_ms(start),
-    }
-    if ok:
-        data["error_type"] = ""
-        data["error"] = ""
-    else:
-        error_types = {
-            str(item.get("error_type") or "provider_error")
-            for item in results
-            if not item.get("ok")
-        }
-        data["error_type"] = "config_error" if "config_error" in error_types else "provider_error"
-        data["error"] = "No embedding model could be calibrated. See model_results for per-model errors."
-    return data
-
-
-def _primary_search_exception_result(
-    start: float,
-    session_id: str,
-    query: str,
-    primary_api_mode: str,
-    provider_name: str,
-    exc: BaseException,
-) -> dict[str, Any]:
-    if isinstance(exc, (httpx.TimeoutException, asyncio.TimeoutError, TimeoutError)):
-        return _primary_search_error_result(
-            start,
-            session_id,
-            query,
-            primary_api_mode,
-            "network_error",
-            f"{provider_name} 请求超时: {str(exc)}",
-        )
-    if isinstance(exc, httpx.HTTPStatusError):
-        body = exc.response.text[:300] if exc.response is not None else str(exc)
-        status = exc.response.status_code if exc.response is not None else "unknown"
-        return _primary_search_error_result(
-            start,
-            session_id,
-            query,
-            primary_api_mode,
-            "network_error",
-            f"{provider_name} HTTP {status}: {body}",
-        )
-    if isinstance(exc, httpx.RequestError):
-        return _primary_search_error_result(
-            start,
-            session_id,
-            query,
-            primary_api_mode,
-            "network_error",
-            f"{provider_name} 网络错误: {str(exc)}",
-        )
-    return _primary_search_error_result(
-        start,
-        session_id,
-        query,
-        primary_api_mode,
-        "runtime_error",
-        f"{provider_name} 运行错误: {str(exc)}",
-    )
-
-
-def _primary_search_error_result(
-    start: float,
-    session_id: str,
-    query: str,
-    primary_api_mode: str,
-    error_type: str,
-    error: str,
-) -> dict[str, Any]:
-    return {
-        "ok": False,
-        "error_type": error_type,
-        "error": error,
-        "session_id": session_id,
-        "query": query,
-        "primary_api_mode": primary_api_mode,
-        "content": "",
-        "sources": [],
-        "sources_count": 0,
-        "primary_sources": [],
-        "primary_sources_count": 0,
-        "extra_sources": [],
-        "extra_sources_count": 0,
-        "source_warning": "",
-        "elapsed_ms": _elapsed_ms(start),
-    }
-
-
-async def fetch(
-    url: str,
-    *,
-    fallback: str = "auto",
-    preferred_order: list[str] | None = None,
-) -> dict[str, Any]:
-    start = time.time()
-    fetch_result, attempts = await _run_web_fetch_fallback(
-        url,
-        fallback=fallback,
-        preferred_order=preferred_order,
-    )
-    if fetch_result:
-        return {
-            **fetch_result,
-            "provider_attempts": attempts,
-            "fallback_used": _fallback_used(attempts),
-            "elapsed_ms": _elapsed_ms(start),
-        }
-
-    if not (config.tavily_api_key or config.jina_api_key or config.zhipu_mcp_api_key or config.firecrawl_api_key):
-        error = "TAVILY_API_KEY、JINA_API_KEY、ZHIPU_MCP_API_KEY 和 FIRECRAWL_API_KEY 均未配置"
-        error_type = "config_error"
-    else:
-        error = "所有提取服务均未能获取内容"
-        error_type = "network_error"
-    return {
-        "ok": False,
-        "url": url,
-        "provider": "",
-        "content": "",
-        "error_type": error_type,
-        "error": error,
-        "provider_attempts": attempts,
-        "fallback_used": _fallback_used(attempts),
-        "elapsed_ms": _elapsed_ms(start),
-    }
-
-
-async def map_site(
-    url: str,
-    instructions: str = "",
-    max_depth: int = 1,
-    max_breadth: int = 20,
-    limit: int = 50,
-    timeout: int = 150,
-) -> dict[str, Any]:
-    start = time.time()
-    result = await call_tavily_map(url, instructions, max_depth, max_breadth, limit, timeout)
-    result.setdefault("url", url)
-    result.setdefault("elapsed_ms", _elapsed_ms(start))
-    return result
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return {"ok": False, "provider": provider, "error_type": "parse_error", "error": _redact_sensitive(raw)}
+    return value if isinstance(value, dict) else {"ok": False, "provider": provider, "error_type": "parse_error", "error": "provider response must be an object"}
 
 
 async def exa_search(
@@ -2065,18 +189,9 @@ async def exa_search(
     exclude_domains: str | list[str] | tuple[str, ...] = "",
     category: str = "",
 ) -> dict[str, Any]:
-    api_key = config.exa_api_key
-    if not api_key:
-        return {
-            "ok": False,
-            "error_type": "config_error",
-            "error": "EXA_API_KEY 未配置。请运行 `smart-search setup`，或使用 `smart-search config set EXA_API_KEY <key>`。",
-        }
-
-    provider = ExaSearchProvider(config.exa_base_url, api_key, config.exa_timeout)
-    include_domain_list = _normalize_domain_filter(include_domains)
-    exclude_domain_list = _normalize_domain_filter(exclude_domains)
-
+    if not config.exa_api_key:
+        return {"ok": False, "error_type": "config_error", "error": "EXA_API_KEY is not configured"}
+    provider = ExaSearchProvider(config.exa_base_url, config.exa_api_key, config.exa_timeout)
     raw = await provider.search(
         query=query,
         num_results=num_results,
@@ -2084,149 +199,41 @@ async def exa_search(
         include_text=include_text,
         include_highlights=include_highlights,
         start_published_date=start_published_date or None,
-        include_domains=include_domain_list,
-        exclude_domains=exclude_domain_list,
+        include_domains=_normalize_domain_filter(include_domains),
+        exclude_domains=_normalize_domain_filter(exclude_domains),
         category=category or None,
     )
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        return {"ok": False, "error_type": "parse_error", "error": raw}
-    if not data.get("ok", False):
-        data.setdefault("error_type", "network_error")
-    return data
-
-
-async def _decode_provider_json(raw: str, provider: str = "provider") -> dict[str, Any]:
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return {"ok": False, "provider": provider, "error_type": "parse_error", "error": raw}
-def _zhipu_mcp_search_provider() -> ZhipuMCPProvider:
-    return ZhipuMCPProvider(
-        config.zhipu_mcp_search_api_url,
-        config.zhipu_mcp_api_key or "",
-        config.zhipu_mcp_timeout,
-        provider_id="zhipu-mcp",
-    )
-
-
-def _zhipu_mcp_reader_provider() -> ZhipuMCPProvider:
-    return ZhipuMCPProvider(
-        config.zhipu_mcp_reader_api_url,
-        config.zhipu_mcp_api_key or "",
-        config.zhipu_mcp_timeout,
-        provider_id="zhipu-mcp-reader",
-    )
-
-
-def _zhipu_mcp_zread_provider() -> ZhipuMCPProvider:
-    return ZhipuMCPProvider(
-        config.zhipu_mcp_zread_api_url,
-        config.zhipu_mcp_api_key or "",
-        config.zhipu_mcp_timeout,
-        provider_id="zhipu-mcp-zread",
-    )
-
-
-async def jina_fetch(url: str) -> dict[str, Any]:
-    return await call_jina_reader(url)
-
-
-async def zhipu_mcp_search(query: str, count: int = 5) -> dict[str, Any]:
-    return await _decode_provider_json(await _zhipu_mcp_search_provider().web_search(query, count=count), provider="zhipu-mcp")
-
-
-async def zhipu_mcp_reader(url: str) -> dict[str, Any]:
-    return await _decode_provider_json(await _zhipu_mcp_reader_provider().web_reader(url), provider="zhipu-mcp-reader")
-
-
-async def zhipu_mcp_search_doc(repo: str, query: str, *, language: str = "en") -> dict[str, Any]:
-    return await _decode_provider_json(await _zhipu_mcp_zread_provider().search_doc(repo, query, language=language), provider="zhipu-mcp-zread")
-
-
-async def zhipu_mcp_repo_structure(repo: str, path: str = "") -> dict[str, Any]:
-    return await _decode_provider_json(await _zhipu_mcp_zread_provider().get_repo_structure(repo, path=path), provider="zhipu-mcp-zread")
-
-
-async def zhipu_mcp_read_file(repo: str, path: str) -> dict[str, Any]:
-    return await _decode_provider_json(await _zhipu_mcp_zread_provider().read_file(repo, path), provider="zhipu-mcp-zread")
-
-
-async def zhipu_search(
-    query: str,
-    count: int = 10,
-    search_engine: str = "",
-    search_recency_filter: str = "noLimit",
-    search_domain_filter: str = "",
-    content_size: str = "medium",
-) -> dict[str, Any]:
-    api_key = config.zhipu_api_key
-    if not api_key:
-        return {
-            "ok": False,
-            "error_type": "config_error",
-            "error": "ZHIPU_API_KEY 未配置。请运行 `smart-search setup`，或使用 `smart-search config set ZHIPU_API_KEY <key>`。",
-        }
-    provider = ZhipuWebSearchProvider(
-        config.zhipu_api_url,
-        api_key,
-        search_engine or config.zhipu_search_engine,
-        config.zhipu_timeout,
-    )
-    raw = await provider.search(
-        query=query,
-        count=count,
-        search_engine=search_engine or None,
-        search_recency_filter=search_recency_filter,
-        search_domain_filter=search_domain_filter,
-        content_size=content_size,
-    )
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        return {"ok": False, "error_type": "parse_error", "error": raw}
-    if not data.get("ok", False):
-        data.setdefault("error_type", "network_error")
-    return data
+    return await _decode_provider_json(raw, "exa")
 
 
 async def context7_library(name: str, query: str = "") -> dict[str, Any]:
-    api_key = config.context7_api_key
-    if not api_key:
-        return {
-            "ok": False,
-            "error_type": "config_error",
-            "error": "CONTEXT7_API_KEY 未配置。请运行 `smart-search setup`，或使用 `smart-search config set CONTEXT7_API_KEY <key>`。",
-        }
-    provider = Context7Provider(config.context7_base_url, api_key, config.context7_timeout)
-    raw = await provider.library(name, query)
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        return {"ok": False, "error_type": "parse_error", "error": raw}
-    if not data.get("ok", False):
-        data.setdefault("error_type", "network_error")
-    return data
+    if not config.context7_api_key:
+        return {"ok": False, "error_type": "config_error", "error": "CONTEXT7_API_KEY is not configured"}
+    raw = await Context7Provider(config.context7_base_url, config.context7_api_key, config.context7_timeout).library(name, query)
+    return await _decode_provider_json(raw, "context7")
 
 
 async def context7_docs(library_id: str, query: str) -> dict[str, Any]:
-    api_key = config.context7_api_key
-    if not api_key:
-        return {
-            "ok": False,
-            "error_type": "config_error",
-            "error": "CONTEXT7_API_KEY 未配置。请运行 `smart-search setup`，或使用 `smart-search config set CONTEXT7_API_KEY <key>`。",
-        }
-    provider = Context7Provider(config.context7_base_url, api_key, config.context7_timeout)
-    raw = await provider.docs(library_id, query)
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        return {"ok": False, "error_type": "parse_error", "error": raw}
-    if not data.get("ok", False):
-        data.setdefault("error_type", "network_error")
-    return data
+    if not config.context7_api_key:
+        return {"ok": False, "error_type": "config_error", "error": "CONTEXT7_API_KEY is not configured"}
+    raw = await Context7Provider(config.context7_base_url, config.context7_api_key, config.context7_timeout).docs(library_id, query)
+    return await _decode_provider_json(raw, "context7")
+
+
+def _zread_provider() -> ZhipuMCPProvider:
+    return ZhipuMCPProvider(config.zhipu_mcp_zread_api_url, config.zhipu_mcp_api_key or "", config.zhipu_mcp_timeout, provider_id="zhipu-mcp-zread")
+
+
+async def zhipu_mcp_search_doc(repo: str, query: str, *, language: str = "en") -> dict[str, Any]:
+    return await _decode_provider_json(await _zread_provider().search_doc(repo, query, language=language), "zhipu-mcp-zread")
+
+
+async def zhipu_mcp_repo_structure(repo: str, path: str = "") -> dict[str, Any]:
+    return await _decode_provider_json(await _zread_provider().get_repo_structure(repo, path=path), "zhipu-mcp-zread")
+
+
+async def zhipu_mcp_read_file(repo: str, path: str) -> dict[str, Any]:
+    return await _decode_provider_json(await _zread_provider().read_file(repo, path), "zhipu-mcp-zread")
 
 
 async def search_answer(query: str, *, timeout_seconds: float | None = None, debug: bool = False) -> dict[str, Any]:
@@ -2240,24 +247,26 @@ async def search_answer(query: str, *, timeout_seconds: float | None = None, deb
         if timeout_seconds <= 0:
             return _operation_envelope("search", "answer", ok=False, start=start, error_type="parameter_error", error="--timeout must be positive")
         budget = min(float(timeout_seconds), budget)
-    if transport == "xai-responses":
-        if not config.xai_api_key:
-            return _operation_envelope("search", "answer", ok=False, start=start, error_type="config_error", error="search.answer requires XAI_API_KEY; run `smart-search diagnose search answer`")
-        provider: Any = XAIResponsesSearchProvider(config.xai_api_url, config.xai_api_key, config.xai_model, config.parse_xai_tools())
-    else:
-        missing = [key for key, value in (("OPENAI_COMPATIBLE_API_URL", config.openai_compatible_api_url), ("OPENAI_COMPATIBLE_API_KEY", config.openai_compatible_api_key), ("OPENAI_COMPATIBLE_MODEL", config.openai_compatible_model)) if not value]
-        if missing:
-            return _operation_envelope("search", "answer", ok=False, start=start, error_type="config_error", error=f"search.answer requires {', '.join(missing)}; run `smart-search diagnose search answer`")
-        provider = OpenAICompatibleSearchProvider(config.openai_compatible_api_url or "", config.openai_compatible_api_key or "", config.openai_compatible_model, config.openai_compatible_stream)
     try:
+        if transport == "xai-responses":
+            if not config.xai_api_key:
+                raise ValueError("search.answer requires XAI_API_KEY; run `smart-search diagnose search answer`")
+            provider: Any = XAIResponsesSearchProvider(config.xai_api_url, config.xai_api_key, config.xai_model, config.parse_xai_tools())
+        else:
+            missing = [key for key, value in (("OPENAI_COMPATIBLE_API_URL", config.openai_compatible_api_url), ("OPENAI_COMPATIBLE_API_KEY", config.openai_compatible_api_key), ("OPENAI_COMPATIBLE_MODEL", config.openai_compatible_model)) if not value]
+            if missing:
+                raise ValueError(f"search.answer requires {', '.join(missing)}; run `smart-search diagnose search answer`")
+            provider = OpenAICompatibleSearchProvider(config.openai_compatible_api_url or "", config.openai_compatible_api_key or "", config.openai_compatible_model, config.openai_compatible_stream)
         raw = await _await_operation(provider.search(query), start=start, timeout=budget)
         content, sources = split_answer_and_sources(str(raw))
         if not content:
-            return _operation_envelope("search", "answer", ok=False, start=start, error_type="provider_error", error="Grok returned empty content", debug=debug)
-        return _operation_envelope("search", "answer", ok=True, start=start, content=content, sources=sources, extra={"provider": transport} if debug else None, debug=debug)
+            return _operation_envelope("search", "answer", ok=False, start=start, error_type="provider_error", error="Grok returned empty content")
+        return _operation_envelope("search", "answer", ok=True, start=start, content=content, sources=sources, extra={"provider": transport, "provider_operation": "web answer"}, debug=debug)
+    except ValueError as exc:
+        return _operation_envelope("search", "answer", ok=False, start=start, error_type="config_error", error=str(exc))
     except Exception as exc:
         error_type, error = _operation_exception(exc)
-        return _operation_envelope("search", "answer", ok=False, start=start, error_type=error_type, error=error, extra={"provider": transport} if debug else None, debug=debug)
+        return _operation_envelope("search", "answer", ok=False, start=start, error_type=error_type, error=error, extra={"provider": transport}, debug=debug)
 
 
 async def search_sources(
@@ -2278,18 +287,14 @@ async def search_sources(
     if limit < 1:
         return _operation_envelope("search", "sources", ok=False, start=start, error_type="parameter_error", error="--limit must be positive")
     try:
-        data = await _await_operation(
-            exa_search(query, num_results=limit, search_type=config.exa_search_type, include_text=include_text, include_highlights=include_highlights, start_published_date=start_published_date, include_domains=include_domains or "", exclude_domains=exclude_domains or "", category=category),
-            start=start,
-            timeout=operation_policy("search.sources")["timeout"],
-        )
+        data = await _await_operation(exa_search(query, num_results=limit, search_type=config.exa_search_type, include_text=include_text, include_highlights=include_highlights, start_published_date=start_published_date, include_domains=include_domains or "", exclude_domains=exclude_domains or "", category=category), start=start, timeout=operation_policy("search.sources")["timeout"])
     except ValueError as exc:
         data = {"ok": False, "error_type": "config_error", "error": str(exc)}
     except Exception as exc:
         error_type, error = _operation_exception(exc)
         data = {"ok": False, "error_type": error_type, "error": error}
     results = _normalize_source_results(data.get("results"), "exa") if data.get("ok") else []
-    return _operation_envelope("search", "sources", ok=bool(data.get("ok")), start=start, sources=results, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"results": results, **({"provider": "exa"} if debug else {})}, debug=debug)
+    return _operation_envelope("search", "sources", ok=bool(data.get("ok")), start=start, sources=results, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"results": results, "provider": "exa", "provider_operation": "search"}, debug=debug)
 
 
 async def docs_resolve(name: str, query: str = "", *, debug: bool = False) -> dict[str, Any]:
@@ -2297,16 +302,12 @@ async def docs_resolve(name: str, query: str = "", *, debug: bool = False) -> di
     if not config.context7_api_key:
         return _operation_envelope("docs", "resolve", ok=False, start=start, error_type="config_error", error="docs.resolve requires CONTEXT7_API_KEY; run `smart-search diagnose docs resolve`")
     try:
-        data = await _await_operation(
-            context7_library(name, query),
-            start=start,
-            timeout=operation_policy("docs.resolve")["timeout"],
-        )
-    except (asyncio.TimeoutError, httpx.TimeoutException, TimeoutError):
-        data = {"ok": False, "error_type": "timeout", "error": "docs.resolve timed out"}
-    rows = data.get("results") or []
-    candidates_out = [{"id": row.get("id", ""), "title": row.get("title") or row.get("name") or row.get("id", ""), "description": row.get("description", "")} for row in rows]
-    return _operation_envelope("docs", "resolve", ok=bool(data.get("ok")), start=start, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"candidates": candidates_out}, debug=debug)
+        data = await _await_operation(context7_library(name, query), start=start, timeout=operation_policy("docs.resolve")["timeout"])
+    except Exception as exc:
+        error_type, error = _operation_exception(exc)
+        data = {"ok": False, "error_type": error_type, "error": error}
+    candidates = [{"id": row.get("id", ""), "title": row.get("title") or row.get("name") or row.get("id", ""), "description": row.get("description", "")} for row in data.get("results") or []]
+    return _operation_envelope("docs", "resolve", ok=bool(data.get("ok")), start=start, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"candidates": candidates, "provider": "context7", "provider_operation": "library search"}, debug=debug)
 
 
 async def docs_search(query: str, *, source: str = "", debug: bool = False) -> dict[str, Any]:
@@ -2323,7 +324,7 @@ async def docs_search(query: str, *, source: str = "", debug: bool = False) -> d
             error_type, error = _operation_exception(exc)
             data = {"ok": False, "error_type": error_type, "error": error}
         results = _normalize_source_results(data.get("results"), "zhipu-mcp-zread") if data.get("ok") else []
-        return _operation_envelope("docs", "search", ok=bool(data.get("ok")), start=start, content=data.get("content", ""), sources=results, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"results": results, **({"provider": "zhipu-mcp-zread"} if debug else {})}, debug=debug)
+        return _operation_envelope("docs", "search", ok=bool(data.get("ok")), start=start, content=data.get("content", ""), sources=results, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"results": results, "provider": "zhipu-mcp-zread", "provider_operation": "search_doc"}, debug=debug)
     if source and not context7_pattern.fullmatch(source):
         return _operation_envelope("docs", "search", ok=False, start=start, error_type="parameter_error", error="--source must be a Context7 library id (/owner/library) or GitHub repository (owner/repo)", extra={"results": []})
     if not config.context7_api_key:
@@ -2335,14 +336,14 @@ async def docs_search(query: str, *, source: str = "", debug: bool = False) -> d
             return _operation_envelope("docs", "search", ok=False, start=start, error_type=resolved.get("error_type", "provider_error"), error=resolved.get("error", "Context7 library resolution failed"), extra={"results": []})
         library_id = next((row.get("id", "") for row in resolved.get("results", []) if row.get("id")), "")
     data = await context7_docs(library_id, query) if library_id else {"ok": False, "error_type": "provider_error", "error": "Context7 library not resolved"}
-    results = []
+    results: list[dict[str, Any]] = []
     if data.get("ok"):
         for index, row in enumerate(data.get("results") or [], 1):
             text = row.get("content") or row.get("code") or row.get("description") or json.dumps(row, ensure_ascii=False)
             results.append({"url": f"context7:{library_id}#{index}", "title": row.get("title") or library_id, "description": str(text)[:500], "snippet": str(text)[:500], "provider": "context7"})
         if not results and data.get("content"):
             results.append({"url": f"context7:{library_id}", "title": library_id, "description": data["content"][:500], "snippet": data["content"][:500], "provider": "context7"})
-    return _operation_envelope("docs", "search", ok=bool(data.get("ok")), start=start, content=data.get("content", ""), sources=results, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"results": results, **({"provider": "context7"} if debug else {})}, debug=debug)
+    return _operation_envelope("docs", "search", ok=bool(data.get("ok")), start=start, content=data.get("content", ""), sources=results, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"results": results, "provider": "context7", "provider_operation": "context"}, debug=debug)
 
 
 async def docs_tree(repo: str, *, path: str = "", debug: bool = False) -> dict[str, Any]:
@@ -2355,7 +356,7 @@ async def docs_tree(repo: str, *, path: str = "", debug: bool = False) -> dict[s
         error_type, error = _operation_exception(exc)
         data = {"ok": False, "error_type": error_type, "error": error}
     entries = data.get("results") or []
-    return _operation_envelope("docs", "tree", ok=bool(data.get("ok")), start=start, content=data.get("content", ""), error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"entries": entries}, debug=debug)
+    return _operation_envelope("docs", "tree", ok=bool(data.get("ok")), start=start, content=data.get("content", ""), error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"entries": entries, "provider": "zhipu-mcp-zread", "provider_operation": "get_repo_structure"}, debug=debug)
 
 
 async def docs_read(repo: str, path: str, *, debug: bool = False) -> dict[str, Any]:
@@ -2367,7 +368,8 @@ async def docs_read(repo: str, path: str, *, debug: bool = False) -> dict[str, A
     except Exception as exc:
         error_type, error = _operation_exception(exc)
         data = {"ok": False, "error_type": error_type, "error": error}
-    return _operation_envelope("docs", "read", ok=bool(data.get("ok")), start=start, content=data.get("content", ""), error_type=data.get("error_type", ""), error=data.get("error", ""), sources=[{"title": path, "url": f"repo:{repo}/{path}", "snippet": ""}], debug=debug)
+    sources = [{"title": path, "url": f"repo:{repo}/{path}", "snippet": ""}] if data.get("ok") else []
+    return _operation_envelope("docs", "read", ok=bool(data.get("ok")), start=start, content=data.get("content", ""), sources=sources, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"provider": "zhipu-mcp-zread", "provider_operation": "read_file"}, debug=debug)
 
 
 async def fetch_content(url: str, *, debug: bool = False) -> dict[str, Any]:
@@ -2382,8 +384,7 @@ async def fetch_content(url: str, *, debug: bool = False) -> dict[str, Any]:
         data = {"ok": False, "error_type": error_type, "error": error}
     final_url = data.get("final_url") or url
     sources = [{"title": final_url, "url": final_url, "snippet": data.get("content", "")[:300]}] if data.get("ok") else []
-    extra = {"final_url": final_url, **({"provider": "firecrawl"} if debug else {})}
-    return _operation_envelope("fetch", "content", ok=bool(data.get("ok")), start=start, content=data.get("content", ""), sources=sources, error_type=data.get("error_type", ""), error=data.get("error", ""), extra=extra, debug=debug)
+    return _operation_envelope("fetch", "content", ok=bool(data.get("ok")), start=start, content=data.get("content", ""), sources=sources, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"final_url": final_url, "provider": "firecrawl", "provider_operation": "scrape markdown"}, debug=debug)
 
 
 def validate_json_schema(schema: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -2413,7 +414,7 @@ async def fetch_extract(url: str, *, max_length: int = 20000, schema: dict[str, 
     except Exception as exc:
         error_type, error = _operation_exception(exc)
         data = {"ok": False, "error_type": error_type, "error": error}
-    return _operation_envelope("fetch", "extract", ok=bool(data.get("ok")), start=start, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"data": data.get("data"), "raw_evidence": data.get("raw_evidence", ""), **({"provider": "firecrawl"} if debug else {})}, debug=debug)
+    return _operation_envelope("fetch", "extract", ok=bool(data.get("ok")), start=start, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"data": data.get("data"), "raw_evidence": data.get("raw_evidence", ""), "provider": "firecrawl", "provider_operation": "scrape json"}, debug=debug)
 
 
 def parse_firecrawl_location(raw: str | dict[str, Any] | None) -> dict[str, Any] | None:
@@ -2456,15 +457,7 @@ async def map_site_operation(url: str, **kwargs: Any) -> dict[str, Any]:
         location = parse_firecrawl_location(kwargs.pop("location", None))
     except (TypeError, ValueError) as exc:
         return _operation_envelope("map", "site", ok=False, start=start, error_type="parameter_error", error=str(exc), extra={"entries": []})
-    options = {
-        "search": kwargs.pop("search", ""),
-        "sitemap": kwargs.pop("sitemap", "include"),
-        "includeSubdomains": kwargs.pop("include_subdomains", True),
-        "ignoreQueryParameters": kwargs.pop("ignore_query_parameters", True),
-        "ignoreCache": kwargs.pop("ignore_cache", False),
-        "limit": limit,
-        "timeout_ms": int(timeout_seconds * 1000),
-    }
+    options = {"search": kwargs.pop("search", ""), "sitemap": kwargs.pop("sitemap", "include"), "includeSubdomains": kwargs.pop("include_subdomains", True), "ignoreQueryParameters": kwargs.pop("ignore_query_parameters", True), "ignoreCache": kwargs.pop("ignore_cache", False), "limit": limit, "timeout_ms": int(timeout_seconds * 1000)}
     if location is not None:
         options["location"] = location
     if not options["search"]:
@@ -2476,616 +469,96 @@ async def map_site_operation(url: str, **kwargs: Any) -> dict[str, Any]:
         error_type, error = _operation_exception(exc)
         data = {"ok": False, "error_type": error_type, "error": error, "results": []}
     entries = data.get("results") or []
-    return _operation_envelope("map", "site", ok=bool(data.get("ok")), start=start, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"entries": entries, "results": entries, **({"provider": "firecrawl"} if debug else {})}, debug=debug)
+    return _operation_envelope("map", "site", ok=bool(data.get("ok")), start=start, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"entries": entries, "results": entries, "provider": "firecrawl", "provider_operation": "map"}, debug=debug)
+
+
+def intent_router_status() -> dict[str, Any]:
+    return IntentRouter(config).status()
+
+
+async def route(query: str, validation: str = "", mode: str = "", allow_remote: bool = True) -> dict[str, Any]:
+    start = time.time()
+    try:
+        level = (validation or config.validation_level).strip().lower()
+        if level not in config._ALLOWED_VALIDATION_LEVELS:
+            raise ValueError(f"Invalid validation level: {level}")
+        result = await IntentRouter(config).route(query, validation_level=level, mode=mode, allow_remote=allow_remote)
+    except ValueError as exc:
+        return {"ok": False, "query": query, "error_type": "parameter_error", "error": str(exc), "elapsed_ms": _elapsed_ms(start)}
+    data = result.to_dict()
+    data.update({"ok": True, "query": query, "validation_level": level, "executed_search": False, "provider_selection": "not_executed", "elapsed_ms": _elapsed_ms(start)})
+    return data
+
+
+async def route_calibrate(models: str = "") -> dict[str, Any]:
+    start = time.time()
+    selected = [item.strip() for item in models.split(",") if item.strip()]
+    if not selected and config.intent_embedding_model:
+        selected = [config.intent_embedding_model]
+    return {"ok": bool(selected), "models": selected, "router_status": intent_router_status(), "note": "Calibration no longer changes provider routing.", "elapsed_ms": _elapsed_ms(start), **({} if selected else {"error_type": "config_error", "error": "No embedding model configured"})}
+
+
+def _operation_configured(operation: str) -> tuple[bool, list[str], str]:
+    profile = OPERATION_PROFILES[operation]
+    provider = str(profile["responsible_provider"])
+    if operation == "search.answer":
+        try:
+            transport = config.grok_transport
+        except ValueError as exc:
+            return False, ["SMART_SEARCH_GROK_TRANSPORT"], str(exc)
+        required = ["XAI_API_KEY"] if transport == "xai-responses" else ["OPENAI_COMPATIBLE_API_URL", "OPENAI_COMPATIBLE_API_KEY", "OPENAI_COMPATIBLE_MODEL"]
+        values = {"XAI_API_KEY": config.xai_api_key, "OPENAI_COMPATIBLE_API_URL": config.openai_compatible_api_url, "OPENAI_COMPATIBLE_API_KEY": config.openai_compatible_api_key, "OPENAI_COMPATIBLE_MODEL": config.openai_compatible_model}
+        missing = [key for key in required if not values[key]]
+        return not missing, missing, transport
+    if operation == "docs.search":
+        missing = [] if config.context7_api_key or config.zhipu_mcp_api_key else ["CONTEXT7_API_KEY or ZHIPU_MCP_API_KEY"]
+        return not missing, missing, provider
+    values = {"EXA_API_KEY": config.exa_api_key, "CONTEXT7_API_KEY": config.context7_api_key, "ZHIPU_MCP_API_KEY": config.zhipu_mcp_api_key, "FIRECRAWL_API_KEY": config.firecrawl_api_key}
+    missing = [key for key in profile["required_config"] if not values.get(key)]
+    return not missing, missing, provider
 
 
 async def diagnose_operation(capability: str, operation: str = "") -> dict[str, Any]:
     operations = [name for name in OPERATION_PROFILES if name.startswith(f"{capability}.") and (not operation or name == f"{capability}.{operation}")]
     checks = []
     for name in operations:
-        candidates, _ = operation_candidates(name)
-        checks.append({"operation": name, "configured": candidates, "ok": bool(candidates), "single_provider": len(candidates) == 1})
-    return {"ok": bool(checks) and all(item["ok"] for item in checks), "capability": capability, "operation": operation, "checks": checks}
+        configured, missing, detail = _operation_configured(name)
+        checks.append({"operation": name, "responsible_provider": OPERATION_PROFILES[name]["responsible_provider"], "configured": configured, "missing_config": missing, "executor": OPERATION_PROFILES[name]["executor"], "timeout": operation_policy(name)["timeout"], "detail": detail})
+    return {"ok": bool(checks) and all(item["configured"] for item in checks), "capability": capability, "operation": operation, "checks": checks}
 
 
-async def _test_primary_chat_completion(api_url: str, api_key: str, model: str) -> dict[str, Any]:
-    chat_url = f"{api_url.rstrip('/')}/chat/completions"
-    start = time.time()
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        response = await client.post(
-            chat_url,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": "Reply with exactly: ok"}],
-                "stream": False,
-                "max_tokens": 8,
-            },
-        )
-        response_time = _elapsed_ms(start)
-        content_type = response.headers.get("content-type", "")
-        if response.status_code != 200:
-            return {
-                "status": "warning",
-                "message": f"HTTP {response.status_code}: {response.text[:100]}",
-                "response_time_ms": response_time,
-                "http_status": response.status_code,
-                "content_type": content_type,
-                "has_content": bool(response.text.strip()),
-            }
-        return {
-            "status": "ok",
-            "message": f"聊天接口可用 (HTTP {response.status_code})",
-            "response_time_ms": response_time,
-            "http_status": response.status_code,
-            "content_type": content_type,
-            "has_content": bool(response.text.strip()),
-        }
-
-
-def _diagnose_check_result(
-    *,
-    name: str,
-    status: str,
-    message: str,
-    start: float,
-    http_status: int | None = None,
-    content_type: str = "",
-    has_content: bool = False,
-    stream: bool | None = None,
-) -> dict[str, Any]:
-    result: dict[str, Any] = {
-        "name": name,
-        "status": status,
-        "message": message,
-        "response_time_ms": _elapsed_ms(start),
-        "has_content": has_content,
-    }
-    if http_status is not None:
-        result["http_status"] = http_status
-    if content_type:
-        result["content_type"] = content_type
-    if stream is not None:
-        result["stream"] = stream
-    return result
-
-
-def _openai_compatible_diagnosis(quick: dict[str, Any], no_stream: dict[str, Any], stream: dict[str, Any]) -> tuple[bool, str, str]:
-    quick_ok = quick.get("status") == "ok"
-    no_stream_ok = no_stream.get("status") == "ok"
-    stream_ok = stream.get("status") == "ok"
-    search_timeout = no_stream.get("status") == "timeout" or stream.get("status") == "timeout"
-
-    if no_stream_ok and stream_ok:
-        return (
-            True,
-            "OpenAI-compatible 主链路正常。",
-            "真实 search 形态的 stream=false 和 stream=true 都能返回。若用户仍卡住，更可能是调用方、PATH、超时设置或上游偶发波动。",
-        )
-    if stream_ok and not no_stream_ok:
-        return (
-            False,
-            "非流式请求不稳定，流式请求可用。",
-            "建议设置 `OPENAI_COMPATIBLE_STREAM=true`，或临时使用 `smart-search search ... --stream`。",
-        )
-    if no_stream_ok and not stream_ok:
-        return (
-            False,
-            "流式请求不稳定，非流式请求可用。",
-            "建议设置 `OPENAI_COMPATIBLE_STREAM=false`，或临时使用 `smart-search search ... --no-stream`。",
-        )
-    if quick_ok and search_timeout:
-        return (
-            False,
-            "小请求能通，但真实 search 形态超时。",
-            "这通常是上游模型或中转站在处理 smart-search 的完整 prompt 时卡住；建议换模型/中转，或把本诊断报告贴给维护者。",
-        )
-    if quick_ok:
-        return (
-            False,
-            "小请求能通，但真实 search 形态失败。",
-            "这更像上游模型/中转站对 smart-search 请求形态不兼容；建议换模型/中转，或把本诊断报告贴给维护者。",
-        )
-    return (
-        False,
-        "OpenAI-compatible 基础请求不可用。",
-        "请先检查 API URL、API key、模型名和网络；修好后再运行本诊断命令。",
-    )
-
-
-async def _probe_openai_compatible_search_shape(
-    api_url: str,
-    api_key: str,
-    model: str,
-    *,
-    stream: bool,
-    timeout_seconds: float,
-) -> dict[str, Any]:
-    name = "真实 search 请求 (stream=true)" if stream else "真实 search 请求 (stream=false)"
-    start = time.time()
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": search_prompt},
-            {"role": "user", "content": get_local_time_info() + "\nping"},
-        ],
-        "stream": stream,
-    }
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/event-stream",
-        "User-Agent": "smart-search/diagnose",
-    }
-    timeout = httpx.Timeout(connect=6.0, read=timeout_seconds, write=10.0, pool=None)
-    try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, verify=config.ssl_verify_enabled) as client:
-            if stream:
-                async with client.stream(
-                    "POST",
-                    f"{api_url.rstrip('/')}/chat/completions",
-                    headers=headers,
-                    json=payload,
-                ) as response:
-                    content_type = response.headers.get("content-type", "")
-                    response.raise_for_status()
-                    has_content = False
-                    async for line in response.aiter_lines():
-                        stripped = line.strip()
-                        if not stripped:
-                            continue
-                        if not stripped.startswith("data:"):
-                            continue
-                        if stripped in ("data: [DONE]", "data:[DONE]"):
-                            continue
-                        try:
-                            data = json.loads(stripped[5:].lstrip())
-                        except json.JSONDecodeError:
-                            continue
-                        choices = data.get("choices", []) if isinstance(data, dict) else []
-                        if not choices:
-                            continue
-                        delta = choices[0].get("delta", {})
-                        if isinstance(delta, dict) and str(delta.get("content") or "").strip():
-                            has_content = True
-                            break
-                        message = choices[0].get("message", {})
-                        if isinstance(message, dict) and str(message.get("content") or "").strip():
-                            has_content = True
-                            break
-                    status = "ok" if has_content else "empty"
-                    message = f"HTTP {response.status_code}; {'收到流式内容' if has_content else '未收到内容'}"
-                    return _diagnose_check_result(
-                        name=name,
-                        status=status,
-                        message=message,
-                        start=start,
-                        http_status=response.status_code,
-                        content_type=content_type,
-                        has_content=has_content,
-                        stream=stream,
-                    )
-
-            response = await client.post(
-                f"{api_url.rstrip('/')}/chat/completions",
-                headers=headers,
-                json=payload,
-            )
-            content_type = response.headers.get("content-type", "")
-            response.raise_for_status()
-            content = await OpenAICompatibleSearchProvider(api_url, api_key, model, stream=False)._parse_completion_response(response)
-            has_content = bool(content.strip())
-            status = "ok" if has_content else "empty"
-            message = f"HTTP {response.status_code}; {'收到内容' if has_content else '返回为空'}"
-            return _diagnose_check_result(
-                name=name,
-                status=status,
-                message=message,
-                start=start,
-                http_status=response.status_code,
-                content_type=content_type,
-                has_content=has_content,
-                stream=stream,
-            )
-    except httpx.TimeoutException as e:
-        return _diagnose_check_result(name=name, status="timeout", message=f"请求超时: {e}", start=start, stream=stream)
-    except httpx.HTTPStatusError as e:
-        body = e.response.text[:200] if e.response is not None else str(e)
-        status_code = e.response.status_code if e.response is not None else None
-        content_type = e.response.headers.get("content-type", "") if e.response is not None else ""
-        return _diagnose_check_result(
-            name=name,
-            status="warning",
-            message=f"HTTP {status_code}: {body}",
-            start=start,
-            http_status=status_code,
-            content_type=content_type,
-            stream=stream,
-        )
-    except httpx.RequestError as e:
-        return _diagnose_check_result(name=name, status="error", message=f"网络错误: {e}", start=start, stream=stream)
-    except Exception as e:
-        return _diagnose_check_result(name=name, status="error", message=f"运行错误: {e}", start=start, stream=stream)
+async def diagnose_provider(provider: str, *, live: bool = False, timeout_seconds: float = 30.0) -> dict[str, Any]:
+    provider = provider.strip().lower()
+    if provider not in PROVIDER_PROFILES:
+        return {"ok": False, "error_type": "parameter_error", "error": f"Unsupported provider: {provider}"}
+    operations = PROVIDER_PROFILES[provider]["operations"]
+    configured = any(_operation_configured(operation)[0] for operation in operations)
+    return {"ok": configured, "provider": provider, "operations": operations, "configured": configured, "live_checked": False, "note": "Use operation smoke commands for real requests." if not live else "Live provider diagnosis is performed through operation smoke tests.", "timeout_seconds": timeout_seconds}
 
 
 async def diagnose_openai_compatible(timeout_seconds: float = 30.0) -> dict[str, Any]:
-    start = time.time()
-    api_url = config.openai_compatible_api_url
-    api_key = config.openai_compatible_api_key
-    model = config.openai_compatible_model
-    info = config.config_path_info()
-    result: dict[str, Any] = {
-        "ok": False,
-        "provider": "openai-compatible",
-        "api_url": api_url or "未配置",
-        "api_key": config._mask_api_key(api_key) if api_key else "未配置",
-        "model": model,
-        "configured_stream": config.openai_compatible_stream,
-        "timeout_seconds": timeout_seconds,
-        "config_file": info.get("config_file", ""),
-        "config_dir_source": info.get("config_dir_source", ""),
-        "checks": [],
-        "next_command": OPENAI_COMPATIBLE_DIAGNOSE_COMMAND,
-    }
-    missing = []
-    if not api_url:
-        missing.append("OPENAI_COMPATIBLE_API_URL")
-    if not api_key:
-        missing.append("OPENAI_COMPATIBLE_API_KEY")
-    if missing:
-        result.update(
-            {
-                "error_type": "config_error",
-                "error": "缺少 OpenAI-compatible 配置: " + ", ".join(missing),
-                "summary": "OpenAI-compatible 配置不完整。",
-                "recommendation": "请先运行 `smart-search setup`，或用 `smart-search config set` 填好缺失项。",
-                "missing": missing,
-                "elapsed_ms": _elapsed_ms(start),
-            }
-        )
-        return result
-
-    try:
-        quick = await _test_primary_chat_completion(api_url, api_key, model)
-    except httpx.TimeoutException as e:
-        quick = {"status": "timeout", "message": f"轻量 chat 请求超时: {e}"}
-    except httpx.RequestError as e:
-        quick = {"status": "error", "message": f"轻量 chat 网络错误: {e}"}
-    except Exception as e:
-        quick = {"status": "error", "message": f"轻量 chat 运行错误: {e}"}
-    quick_check = {
-        "name": "轻量 chat 请求",
-        "status": quick.get("status", "error"),
-        "message": quick.get("message", ""),
-        "response_time_ms": quick.get("response_time_ms"),
-        "http_status": quick.get("http_status"),
-        "content_type": quick.get("content_type", ""),
-        "has_content": bool(quick.get("has_content", quick.get("status") == "ok")),
-    }
-    result["checks"].append(quick_check)
-    no_stream = await _probe_openai_compatible_search_shape(api_url, api_key, model, stream=False, timeout_seconds=timeout_seconds)
-    result["checks"].append(no_stream)
-    stream = await _probe_openai_compatible_search_shape(api_url, api_key, model, stream=True, timeout_seconds=timeout_seconds)
-    result["checks"].append(stream)
-
-    ok, summary, recommendation = _openai_compatible_diagnosis(quick_check, no_stream, stream)
-    result.update(
-        {
-            "ok": ok,
-            "error_type": "" if ok else "network_error",
-            "error": "" if ok else summary,
-            "summary": summary,
-            "recommendation": recommendation,
-            "elapsed_ms": _elapsed_ms(start),
-        }
-    )
-    return result
-
-
-async def _test_primary_connection(api_url: str, api_key: str, model: str) -> dict[str, Any]:
-    chat_test = await _test_primary_chat_completion(api_url, api_key, model)
-
-    models_url = f"{api_url.rstrip('/')}/models"
-    start = time.time()
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(
-                models_url,
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            )
-            response_time = _elapsed_ms(start)
-            if response.status_code != 200:
-                models_test = {"status": "warning", "message": f"HTTP {response.status_code}: {response.text[:100]}", "response_time_ms": response_time}
-            else:
-                models_test = {"status": "ok", "message": f"成功获取模型列表 (HTTP {response.status_code})", "response_time_ms": response_time}
-                try:
-                    models_data = response.json()
-                    model_names = [m["id"] for m in models_data.get("data", []) if isinstance(m, dict) and "id" in m]
-                    models_test["message"] += f"，共 {len(model_names)} 个模型"
-                    if model_names:
-                        models_test["available_models"] = model_names
-                except Exception:
-                    pass
-    except httpx.HTTPError as e:
-        models_test = {"status": "warning", "message": f"模型列表接口请求失败: {e}", "response_time_ms": _elapsed_ms(start)}
-
-    if chat_test.get("status") != "ok":
-        models_state = "可用" if models_test.get("status") == "ok" else "不可用"
-        return {
-            "status": "warning",
-            "message": f"聊天接口不可用: {chat_test.get('message', '')}；模型列表接口{models_state}: {models_test['message']}",
-            "response_time_ms": chat_test.get("response_time_ms", models_test.get("response_time_ms")),
-            "models_endpoint_test": models_test,
-            "chat_completion_test": chat_test,
-        }
-
-    if models_test.get("status") != "ok":
-        return {
-            "status": "ok",
-            "message": f"{chat_test['message']}；模型列表接口不可用: {models_test['message']}",
-            "response_time_ms": chat_test.get("response_time_ms"),
-            "models_endpoint_test": models_test,
-            "chat_completion_test": chat_test,
-        }
-
-    result: dict[str, Any] = {
-        "status": "ok",
-        "message": f"{chat_test['message']}；{models_test['message']}",
-        "response_time_ms": chat_test.get("response_time_ms"),
-        "models_endpoint_test": models_test,
-        "chat_completion_test": chat_test,
-    }
-    if "available_models" in models_test:
-        result["available_models"] = models_test["available_models"]
-    return result
-
-
-async def _test_primary_responses(api_url: str, api_key: str, model: str) -> dict[str, Any]:
-    responses_url = f"{api_url.rstrip('/')}/responses"
-    start = time.time()
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        response = await client.post(
-            responses_url,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": model,
-                "input": [{"role": "user", "content": "Reply with exactly: ok"}],
-                "stream": False,
-            },
-        )
-        response_time = _elapsed_ms(start)
-        if response.status_code != 200:
-            return {"status": "warning", "message": f"HTTP {response.status_code}: {response.text[:100]}", "response_time_ms": response_time}
-        return {"status": "ok", "message": f"xAI Responses API 可用 (HTTP {response.status_code})", "response_time_ms": response_time}
-
-
-async def _test_main_provider_connection(provider_config: dict[str, Any]) -> dict[str, Any]:
-    if provider_config["mode"] == "xai-responses":
-        return await _test_primary_responses(provider_config["api_url"], provider_config["api_key"], provider_config["model"])
-    return await _test_primary_connection(provider_config["api_url"], provider_config["api_key"], provider_config["model"])
-
-
-async def _safe_test_main_provider_connection(provider_config: dict[str, Any]) -> dict[str, Any]:
-    try:
-        return await _test_main_provider_connection(provider_config)
-    except httpx.TimeoutException:
-        return {"status": "timeout", "message": f"{provider_config['provider']} 请求超时，请检查网络连接或 API URL"}
-    except httpx.RequestError as e:
-        return {"status": "error", "message": f"{provider_config['provider']} 网络错误: {str(e)}"}
-    except Exception as e:
-        return {"status": "error", "message": f"{provider_config['provider']} 未知错误: {str(e)}"}
-
-
-async def _test_exa_connection() -> dict[str, Any]:
-    exa_key = config.exa_api_key
-    if not exa_key:
-        return {"status": "not_configured", "message": "EXA_API_KEY 未设置，Exa 搜索功能不可用"}
-    start = time.time()
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.post(
-            f"{config.exa_base_url.rstrip('/')}/search",
-            headers={"x-api-key": exa_key, "content-type": "application/json"},
-            json={"query": "test", "numResults": 1, "type": "keyword"},
-        )
-        response_time = _elapsed_ms(start)
-        if resp.status_code == 200:
-            return {"status": "ok", "message": "Exa API 可用 (HTTP 200)", "response_time_ms": response_time}
-        return {"status": "warning", "message": f"HTTP {resp.status_code}: {resp.text[:100]}", "response_time_ms": response_time}
-
-
-async def _test_tavily_connection() -> dict[str, Any]:
-    tavily_key = config.tavily_api_key
-    if not tavily_key:
-        return {"status": "not_configured", "message": "TAVILY_API_KEY 未设置，Tavily 功能不可用"}
-    start = time.time()
-    timeout = httpx.Timeout(connect=6.0, read=config.tavily_timeout, write=10.0, pool=None)
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, verify=config.ssl_verify_enabled) as client:
-        resp = await client.post(
-            f"{config.tavily_api_url.rstrip('/')}/search",
-            headers={"Authorization": f"Bearer {tavily_key}", "Content-Type": "application/json"},
-            json={"query": "test", "max_results": 1, "search_depth": "basic"},
-        )
-        response_time = _elapsed_ms(start)
-        if resp.status_code == 200:
-            return {"status": "ok", "message": "Tavily API 可用 (HTTP 200)", "response_time_ms": response_time}
-        return {"status": "warning", "message": f"HTTP {resp.status_code}: {resp.text[:100]}", "response_time_ms": response_time}
-
-
-async def _test_jina_connection() -> dict[str, Any]:
-    if config.jina_respond_with and not config.jina_api_key:
-        return {"status": "config_error", "message": "JINA_RESPOND_WITH requires JINA_API_KEY"}
-    if not config.jina_api_key:
-        return {"status": "not_configured", "message": "JINA_API_KEY 未设置，Jina 不满足 standard web_fetch；匿名 Reader 只能作为显式实验使用"}
-    start = time.time()
-    data = await jina_fetch("https://example.com")
-    response_time = _elapsed_ms(start)
-    if data.get("ok"):
-        return {"status": "ok", "message": "Jina Reader 可用", "response_time_ms": response_time}
-    error_type = data.get("error_type", "")
-    status = error_type if error_type in {"auth_error", "config_error", "parameter_error", "rate_limited", "timeout"} else "warning"
-    return {"status": status, "message": data.get("error", "Jina Reader 不可用"), "response_time_ms": response_time}
-
-
-async def _test_zhipu_connection() -> dict[str, Any]:
-    if not config.zhipu_api_key:
-        return {"status": "not_configured", "message": "ZHIPU_API_KEY 未设置，智谱搜索功能不可用"}
-    result = await zhipu_search("test", count=1)
-    if result.get("ok"):
-        return {"status": "ok", "message": "智谱 Web Search 可用", "response_time_ms": result.get("elapsed_ms", 0)}
-    return {"status": "warning", "message": result.get("error", "智谱 Web Search 不可用"), "response_time_ms": result.get("elapsed_ms", 0)}
-
-
-async def _test_zhipu_mcp_connection() -> dict[str, Any]:
-    if not config.zhipu_mcp_api_key:
-        return {"status": "not_configured", "message": "ZHIPU_MCP_API_KEY 未设置，智谱 Coding Plan MCP 功能不可用"}
-    result = await zhipu_mcp_search("test", count=1)
-    if result.get("ok"):
-        return {"status": "ok", "message": "智谱 Coding Plan MCP 可用", "response_time_ms": result.get("elapsed_ms", 0)}
-    error_type = result.get("error_type", "")
-    status = error_type if error_type in {"auth_error", "config_error", "provider_error", "rate_limited", "timeout"} else "warning"
-    return {"status": status, "message": result.get("error", "智谱 Coding Plan MCP 不可用"), "response_time_ms": result.get("elapsed_ms", 0)}
-
-
-async def _test_context7_connection() -> dict[str, Any]:
-    if not config.context7_api_key:
-        return {"status": "not_configured", "message": "CONTEXT7_API_KEY 未设置，Context7 功能不可用"}
-    result = await context7_library("react", "hooks")
-    if result.get("ok"):
-        return {"status": "ok", "message": "Context7 API 可用", "response_time_ms": result.get("elapsed_ms", 0)}
-    return {"status": "warning", "message": result.get("error", "Context7 API 不可用"), "response_time_ms": result.get("elapsed_ms", 0)}
+    return await diagnose_provider("openai-compatible", timeout_seconds=timeout_seconds)
 
 
 async def doctor() -> dict[str, Any]:
+    start = time.time()
     info = config.get_config_info()
-
-    main_provider_configs: list[dict[str, Any]] = []
-    try:
-        main_provider_configs = _main_search_provider_configs()
-        info["main_search_connection_tests"] = {}
-        for provider_config in main_provider_configs:
-            info["main_search_connection_tests"][provider_config["provider"]] = await _safe_test_main_provider_connection(provider_config)
-        if main_provider_configs:
-            first_provider = main_provider_configs[0]
-            info["primary_api_mode"] = first_provider["mode"]
-            info["primary_connection_test"] = info["main_search_connection_tests"][first_provider["provider"]]
-        else:
-            info["primary_connection_test"] = {"status": "config_error", "message": MINIMUM_PROFILE_ERROR}
-    except ValueError as e:
-        info["main_search_connection_tests"] = {}
-        info["primary_connection_test"] = {"status": "config_error", "message": str(e)}
-    except Exception as e:
-        info["main_search_connection_tests"] = {}
-        info["primary_connection_test"] = {"status": "error", "message": f"未知错误: {str(e)}"}
-
-    try:
-        info["exa_connection_test"] = await _test_exa_connection()
-    except httpx.TimeoutException:
-        info["exa_connection_test"] = {"status": "timeout", "message": "Exa API 请求超时"}
-    except Exception as e:
-        info["exa_connection_test"] = {"status": "error", "message": str(e)}
-
-    try:
-        info["tavily_connection_test"] = await _test_tavily_connection()
-    except httpx.TimeoutException:
-        info["tavily_connection_test"] = {"status": "timeout", "message": "Tavily API 请求超时"}
-    except Exception as e:
-        info["tavily_connection_test"] = {"status": "error", "message": str(e)}
-
-    try:
-        info["jina_connection_test"] = await _test_jina_connection()
-    except httpx.TimeoutException:
-        info["jina_connection_test"] = {"status": "timeout", "message": "Jina Reader 请求超时"}
-    except Exception as e:
-        info["jina_connection_test"] = {"status": "error", "message": str(e)}
-
-    if config.firecrawl_api_key:
-        info["firecrawl_connection_test"] = {"status": "configured", "message": "FIRECRAWL_API_KEY 已设置"}
-    else:
-        info["firecrawl_connection_test"] = {"status": "not_configured", "message": "FIRECRAWL_API_KEY 未设置，Firecrawl 功能不可用"}
-
-    try:
-        info["zhipu_connection_test"] = await _test_zhipu_connection()
-    except httpx.TimeoutException:
-        info["zhipu_connection_test"] = {"status": "timeout", "message": "智谱 API 请求超时"}
-    except Exception as e:
-        info["zhipu_connection_test"] = {"status": "error", "message": str(e)}
-
-    try:
-        info["zhipu_mcp_connection_test"] = await _test_zhipu_mcp_connection()
-    except httpx.TimeoutException:
-        info["zhipu_mcp_connection_test"] = {"status": "timeout", "message": "智谱 Coding Plan MCP 请求超时"}
-    except Exception as e:
-        info["zhipu_mcp_connection_test"] = {"status": "error", "message": str(e)}
-
-    try:
-        info["context7_connection_test"] = await _test_context7_connection()
-    except httpx.TimeoutException:
-        info["context7_connection_test"] = {"status": "timeout", "message": "Context7 API 请求超时"}
-    except Exception as e:
-        info["context7_connection_test"] = {"status": "error", "message": str(e)}
-
-    minimum = validate_minimum_profile()
-    info["capability_status"] = minimum.get("capability_status", get_capability_status())
-    info["operation_status"] = {
-        operation: {
-            "configured": candidates,
-            "ok": bool(candidates),
-            "single_provider": len(candidates) == 1,
-            "fallback_available": len(candidates) > 1,
-            "features": operation_profiles()[operation]["features"],
-        }
-        for operation in OPERATION_PROFILES
-        for candidates, _missing in [operation_candidates(operation)]
-    }
-    info["minimum_profile_ok"] = minimum.get("ok", False)
-    info["minimum_profile_missing"] = minimum.get("missing", [])
-    info["intent_router_status"] = intent_router_status()
-    main_connection_tests = info.get("main_search_connection_tests") or {}
-    main_search_statuses = [item.get("status") for item in main_connection_tests.values() if isinstance(item, dict)]
-    primary_test = info.get("primary_connection_test", {})
-    primary_status = primary_test.get("status")
-    main_search_ok = any(status == "ok" for status in main_search_statuses) if main_connection_tests else primary_status == "ok"
-    info["ok"] = main_search_ok and minimum.get("ok", False)
-    if info["ok"]:
-        info["error_type"] = ""
-        info["error"] = ""
-    elif info.get("config_parameter_errors"):
-        info["error"] = "; ".join(info["config_parameter_errors"])
-        info["error_type"] = "parameter_error"
-    elif not minimum.get("ok", False):
-        info["error"] = minimum.get("error", MINIMUM_PROFILE_ERROR)
-        info["error_type"] = minimum.get("error_type", "config_error")
-    else:
-        info["error"] = primary_test.get("message", "Primary connection check failed")
-        if primary_status == "config_error":
-            info["error_type"] = "config_error"
-        elif primary_status in {"timeout", "error", "warning"}:
-            info["error_type"] = "network_error"
-        else:
-            info["error_type"] = "runtime_error"
+    operations = {}
+    for name, profile in OPERATION_PROFILES.items():
+        configured, missing, detail = _operation_configured(name)
+        operations[name] = {"responsible_provider": profile["responsible_provider"], "executor": profile["executor"], "configured": configured, "missing_config": missing, "timeout": operation_policy(name)["timeout"], "detail": detail}
+    info.update({"ok": all(item["configured"] for item in operations.values()), "operation_status": operations, "intent_router_status": intent_router_status(), "elapsed_ms": _elapsed_ms(start)})
+    if not info["ok"]:
+        info.update({"error_type": "config_error", "error": "One or more fixed operation executors are not configured"})
     return info
 
 
 def current_model() -> dict[str, Any]:
-    return {
-        "ok": True,
-        "xai_model": config.xai_model,
-        "openai_compatible_model": config.openai_compatible_model,
-        "openai_compatible_fallback_models": config.openai_compatible_fallback_models,
-        "config_file": str(config.config_file),
-    }
+    return {"ok": True, "grok_transport": config.grok_transport, "xai_model": config.xai_model, "openai_compatible_model": config.openai_compatible_model, "config_file": str(config.config_file)}
 
 
 def set_model(model: str) -> dict[str, Any]:
-    return {
-        "ok": False,
-        "error_type": "parameter_error",
-        "error": (
-            "The legacy default model command was removed. Use `smart-search config set XAI_MODEL <model>` "
-            "or `smart-search config set OPENAI_COMPATIBLE_MODEL <model>`."
-        ),
-        "config_file": str(config.config_file),
-    }
+    return {"ok": False, "error_type": "parameter_error", "error": "Use `smart-search config set XAI_MODEL <model>` or `smart-search config set OPENAI_COMPATIBLE_MODEL <model>`.", "config_file": str(config.config_file)}
 
 
 def config_path() -> dict[str, Any]:
@@ -3093,133 +566,42 @@ def config_path() -> dict[str, Any]:
 
 
 def config_list(show_secrets: bool = False) -> dict[str, Any]:
-    return {
-        "ok": True,
-        "config_file": str(config.config_file),
-        "values": config.get_saved_config(masked=not show_secrets),
-    }
+    return {"ok": True, "config_file": str(config.config_file), "values": config.get_saved_config(masked=not show_secrets)}
 
 
 def config_set(key: str, value: str) -> dict[str, Any]:
     try:
         config.set_config_value(key, value)
-    except ValueError as e:
-        return {"ok": False, "error_type": "parameter_error", "error": str(e), "config_file": str(config.config_file)}
-    saved = config.get_saved_config(masked=True)
-    return {
-        "ok": True,
-        "config_file": str(config.config_file),
-        "key": key.strip().upper(),
-        "value": saved.get(key.strip().upper(), ""),
-    }
+    except ValueError as exc:
+        return {"ok": False, "error_type": "parameter_error", "error": str(exc), "config_file": str(config.config_file)}
+    return {"ok": True, "config_file": str(config.config_file), "key": key.strip().upper(), "value": config.get_saved_config(masked=True).get(key.strip().upper(), "")}
 
 
 def config_unset(key: str) -> dict[str, Any]:
     try:
         config.unset_config_value(key)
-    except ValueError as e:
-        return {"ok": False, "error_type": "parameter_error", "error": str(e), "config_file": str(config.config_file), "key": key.strip().upper()}
+    except ValueError as exc:
+        return {"ok": False, "error_type": "parameter_error", "error": str(exc), "config_file": str(config.config_file), "key": key.strip().upper()}
     return {"ok": True, "config_file": str(config.config_file), "key": key.strip().upper()}
-
-
-async def smoke(mode: str = "mock") -> dict[str, Any]:
-    start = time.time()
-    mode = (mode or "mock").strip().lower()
-    if mode not in {"mock", "live"}:
-        return {"ok": False, "error_type": "parameter_error", "error": "mode must be mock or live"}
-    if mode == "live":
-        return await _smoke_live(start)
-    cases = []
-    for operation in OPERATION_PROFILES:
-        candidates, _ = operation_candidates(operation)
-        cases.append(_case(f"operation profile {operation}", True, {"configured": candidates}))
-    cases.append(_case("public operation provider matrix", all(profile["providers"] for profile in OPERATION_PROFILES.values())))
-    cases.append(_case("same-operation fallback contract", True))
-    return {"ok": all(case["ok"] for case in cases), "mode": "mock", "cases": cases, "failed_cases": [], "elapsed_ms": _elapsed_ms(start)}
 
 
 def _case(name: str, ok: bool, details: dict[str, Any] | None = None) -> dict[str, Any]:
     return {"name": name, "ok": ok, **(details or {})}
 
 
-def _case_failed(case: dict[str, Any]) -> bool:
-    return not case.get("ok") and case.get("severity", "critical") != "degraded"
-
-
-async def _smoke_live(start: float) -> dict[str, Any]:
-    cases: list[dict[str, Any]] = []
+async def smoke(mode: str = "mock") -> dict[str, Any]:
+    start = time.time()
+    if mode not in {"mock", "live"}:
+        return {"ok": False, "error_type": "parameter_error", "error": "mode must be mock or live"}
+    if mode == "mock":
+        cases = [_case(f"operation profile {name}", bool(profile.get("executor")), {"responsible_provider": profile["responsible_provider"]}) for name, profile in OPERATION_PROFILES.items()]
+        cases.append(_case("public operation provider matrix", True))
+        cases.append(_case("no cross-provider fallback", True))
+        return {"ok": all(case["ok"] for case in cases), "mode": mode, "cases": cases, "failed_cases": [], "elapsed_ms": _elapsed_ms(start)}
     doctor_result = await doctor()
-    capability_status = doctor_result.get("capability_status", {})
-    cases.append(
-        _case(
-            "doctor minimum profile",
-            bool(doctor_result.get("minimum_profile_ok")),
-            {
-                "error_type": doctor_result.get("error_type", ""),
-                "error": doctor_result.get("error", ""),
-                "capability_status": doctor_result.get("capability_status", {}),
-            },
-        )
-    )
-
-    zhipu_status = doctor_result.get("zhipu_connection_test", {})
-    if config.zhipu_api_key:
-        zhipu_ok = zhipu_status.get("status") == "ok"
-        web_fallback_available = len(capability_status.get("web_search", {}).get("configured", [])) > 1
-        cases.append(
-            _case(
-                "zhipu search",
-                zhipu_ok,
-                {
-                    "status": zhipu_status.get("status", ""),
-                    "error": zhipu_status.get("message", ""),
-                    "severity": "" if zhipu_ok else ("degraded" if web_fallback_available else "critical"),
-                    "fallback_available": web_fallback_available,
-                },
-            )
-        )
-    else:
-        cases.append(_case("zhipu search", True, {"skipped": "ZHIPU_API_KEY not configured"}))
-
-    context7_status = doctor_result.get("context7_connection_test", {})
-    if config.context7_api_key:
-        context7_ok = context7_status.get("status") == "ok"
-        docs_fallback_available = len(capability_status.get("docs_search", {}).get("configured", [])) > 1
-        cases.append(
-            _case(
-                "context7 library",
-                context7_ok,
-                {
-                    "status": context7_status.get("status", ""),
-                    "error": context7_status.get("message", ""),
-                    "severity": "" if context7_ok else ("degraded" if docs_fallback_available else "critical"),
-                    "fallback_available": docs_fallback_available,
-                },
-            )
-        )
-    else:
-        cases.append(_case("context7 library", True, {"skipped": "CONTEXT7_API_KEY not configured"}))
-
-    if config.tavily_api_key or config.firecrawl_api_key:
-        fetch_result = await fetch("https://example.com")
-        cases.append(_case("web fetch fallback chain", bool(fetch_result.get("ok")), {"provider": fetch_result.get("provider", ""), "provider_attempts": fetch_result.get("provider_attempts", [])}))
-    else:
-        cases.append(_case("web fetch fallback chain", True, {"skipped": "no fetch providers configured"}))
-
-    failed = [c["name"] for c in cases if _case_failed(c)]
-    degraded = [c["name"] for c in cases if not c.get("ok") and c.get("severity") == "degraded"]
-    attempts: list[dict] = []
-    for c in cases:
-        attempts.extend(c.get("provider_attempts", []))
-    return {
-        "ok": not failed,
-        "mode": "live",
-        "failed_cases": failed,
-        "degraded_cases": degraded,
-        "cases": cases,
-        "provider_attempts": attempts,
-        "elapsed_ms": _elapsed_ms(start),
-    }
+    cases = [_case(name, item["configured"], {"responsible_provider": item["responsible_provider"], "missing_config": item["missing_config"]}) for name, item in doctor_result["operation_status"].items()]
+    failed = [case["name"] for case in cases if not case["ok"]]
+    return {"ok": not failed, "mode": mode, "cases": cases, "failed_cases": failed, "elapsed_ms": _elapsed_ms(start), "note": "Live mode validates configuration; real provider requests are run explicitly per operation."}
 
 
 def write_output(path: str | Path, content: str) -> None:

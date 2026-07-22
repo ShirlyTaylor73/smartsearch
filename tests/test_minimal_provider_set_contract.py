@@ -190,14 +190,9 @@ async def test_search_sources_does_not_fallback_after_exa_failure(monkeypatch):
     async def fail_exa(*args, **kwargs):
         return {"ok": False, "error_type": "network_error", "error": "exa failed"}
 
-    async def forbidden(*args, **kwargs):
-        raise AssertionError("cross-provider fallback attempted")
-
     monkeypatch.setattr(service, "exa_search", fail_exa)
-    monkeypatch.setattr(service, "zhipu_search", forbidden)
-    monkeypatch.setattr(service, "zhipu_mcp_search", forbidden)
-    monkeypatch.setattr(service, "call_tavily_search", forbidden)
-    monkeypatch.setattr(service, "call_firecrawl_search", forbidden)
+    for removed in ("zhipu_search", "zhipu_mcp_search", "call_tavily_search", "call_firecrawl_search"):
+        assert not hasattr(service, removed)
 
     result = await service.search_sources("q")
     assert result["ok"] is False

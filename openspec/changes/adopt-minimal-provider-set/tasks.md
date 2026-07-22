@@ -42,23 +42,23 @@
 
 ## 5. 删除非最小 Provider 与旧兼容层
 
-- [ ] 5.1 删除 Tavily、Jina、Zhipu REST Search、Zhipu MCP Search/Reader、DeepWiki 的代码入口和 provider registry 描述
-- [ ] 5.2 删除上述 provider 的配置属性、setup 提示、doctor/smoke fixture 与测试环境变量
-- [ ] 5.3 保留 Zhipu MCP ZRead adapter，删除其 web search/reader 方法和不符合实际 schema 的 ref 兼容代码
-- [ ] 5.4 删除 provider 专用隐藏 CLI 命令与 alias 转发，并确保旧 `exa-similar` 不会转发到普通 Search
-- [ ] 5.5 删除普通输出中的 `provider_attempts`、`fallback_used` 等候选链字段，同时保留 debug 的单 provider 脱敏元数据
-- [ ] 5.6 使用 `rg` 检查已删除 provider、fallback、feature negotiation 与旧参数没有运行时残留
-- [ ] 5.7 运行删除行为与 import/compile 聚焦测试，检查 diff 后提交清理阶段 commit
+- [x] 5.1 删除 Tavily、Jina、Zhipu REST Search、Zhipu MCP Search/Reader、DeepWiki 的代码入口和 provider registry 描述
+- [x] 5.2 删除上述 provider 的配置属性、setup 提示、doctor/smoke fixture 与测试环境变量
+- [x] 5.3 保留 Zhipu MCP ZRead adapter，删除其 web search/reader 方法和不符合实际 schema 的 ref 兼容代码
+- [x] 5.4 删除 provider 专用隐藏 CLI 命令与 alias 转发，并确保旧 `exa-similar` 不会转发到普通 Search
+- [x] 5.5 删除普通输出中的 `provider_attempts`、`fallback_used` 等候选链字段，同时保留 debug 的单 provider 脱敏元数据
+- [x] 5.6 使用 `rg` 检查已删除 provider、fallback、feature negotiation 与旧参数没有运行时残留
+- [x] 5.7 运行删除行为与 import/compile 聚焦测试，检查 diff 后提交清理阶段 commit
 
 ## 6. Setup、Doctor 与 Diagnose
 
-- [ ] 6.1 重做 setup，使其选择单一 Grok transport 并只配置 Exa、Context7、ZRead、Firecrawl 所需凭据
-- [ ] 6.2 更新 `config path|list|set|unset` 的允许键、旧键忽略/清理提示和密钥脱敏测试
-- [ ] 6.3 更新 doctor，按每个公开 operation 输出 `responsible_provider`、必需配置和 executor 可用性
-- [ ] 6.4 更新 `diagnose search|docs|fetch|map`，search 只含 `answer|sources`，并移除 candidates/single-provider/fallback 状态
-- [ ] 6.5 将 `diagnose provider` 限定为 xAI Responses、OpenAI-compatible、Exa、Context7、ZRead、Firecrawl 并区分配置检查与真实连接检查
-- [ ] 6.6 保持 `diagnose route|route-calibrate|smoke`、`dev regression`、skills、help 和 version 功能可用且不参与 provider 路由
-- [ ] 6.7 运行 setup/config/doctor/diagnose 聚焦测试，检查 diff 后提交维护命令阶段 commit
+- [x] 6.1 重做 setup，使其选择单一 Grok transport 并只配置 Exa、Context7、ZRead、Firecrawl 所需凭据
+- [x] 6.2 更新 `config path|list|set|unset` 的允许键、旧键忽略/清理提示和密钥脱敏测试
+- [x] 6.3 更新 doctor，按每个公开 operation 输出 `responsible_provider`、必需配置和 executor 可用性
+- [x] 6.4 更新 `diagnose search|docs|fetch|map`，search 只含 `answer|sources`，并移除 candidates/single-provider/fallback 状态
+- [x] 6.5 将 `diagnose provider` 限定为 xAI Responses、OpenAI-compatible、Exa、Context7、ZRead、Firecrawl 并区分配置检查与真实连接检查
+- [x] 6.6 保持 `diagnose route|route-calibrate|smoke`、`dev regression`、skills、help 和 version 功能可用且不参与 provider 路由
+- [x] 6.7 运行 setup/config/doctor/diagnose 聚焦测试，检查 diff 后提交维护命令阶段 commit
 
 ## 7. 文档、Skill 与 Breaking Release
 

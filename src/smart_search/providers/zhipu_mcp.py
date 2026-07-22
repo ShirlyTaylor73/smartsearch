@@ -193,12 +193,9 @@ class ZhipuMCPProvider:
         for key in ("query", "url", "repo_name", "dir_path", "file_path", "language"):
             if arguments.get(key):
                 output[key] = arguments[key]
-        if name == "webReader":
-            output["url"] = arguments.get("url", "")
-        else:
-            results = [] if is_error else _parse_markdown_results(text, self.provider_id)
-            output["results"] = results
-            output["total"] = len(results)
+        results = [] if is_error else _parse_markdown_results(text, self.provider_id)
+        output["results"] = results
+        output["total"] = len(results)
         if is_error:
             output["error_type"] = content_error[0] if content_error else "provider_error"
             output["error"] = content_error[1] if content_error else (text or "Zhipu MCP tool returned isError=true")
