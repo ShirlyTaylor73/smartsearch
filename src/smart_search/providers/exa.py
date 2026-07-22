@@ -74,7 +74,7 @@ class ExaSearchProvider(BaseSearchProvider):
         self,
         query: str,
         num_results: int = 5,
-        search_type: str = "neural",
+        search_type: str = "auto",
         include_text: bool = False,
         include_highlights: bool = False,
         start_published_date: str | None = None,
@@ -93,7 +93,6 @@ class ExaSearchProvider(BaseSearchProvider):
             "query": query,
             "numResults": num_results,
             "type": search_type,
-            "useAutoprompt": True,
         }
         if include_text or include_highlights:
             payload["contents"] = {
@@ -141,51 +140,6 @@ class ExaSearchProvider(BaseSearchProvider):
             }
 
         await log_info(ctx, "Exa search finished!", config.debug_enabled)
-        return json.dumps(output, ensure_ascii=False, indent=2)
-
-    async def find_similar(self, url: str, num_results: int = 5, ctx=None) -> str:
-        endpoint = f"{self.api_url.rstrip('/')}/findSimilar"
-        headers = {
-            "accept": "application/json",
-            "content-type": "application/json",
-            "x-api-key": self.api_key,
-        }
-        payload = {
-            "url": url,
-            "numResults": num_results,
-        }
-
-        await log_info(ctx, f"Exa find_similar: {url}", config.debug_enabled)
-
-        start_time = time.time()
-        try:
-            data = await self._request_with_retry(endpoint, headers, payload, ctx)
-            elapsed_ms = round((time.time() - start_time) * 1000, 2)
-
-            results = [
-                _normalize_result(item, include_text=False, include_highlights=False)
-                for item in data.get("results", [])
-            ]
-
-            output = {
-                "ok": True,
-                "url": url,
-                "results": results,
-                "total": len(results),
-                "elapsed_ms": elapsed_ms,
-            }
-        except Exception as e:
-            elapsed_ms = round((time.time() - start_time) * 1000, 2)
-            error = _error_payload(e)
-            output = {
-                "ok": False,
-                "url": url,
-                "error_type": error["error_type"],
-                "error": error["error"],
-                "elapsed_ms": elapsed_ms,
-            }
-
-        await log_info(ctx, "Exa find_similar finished!", config.debug_enabled)
         return json.dumps(output, ensure_ascii=False, indent=2)
 
     async def _request_with_retry(

@@ -145,35 +145,16 @@ PROVIDER_PROFILES: dict[str, dict[str, Any]] = {
         "route_reasons": ["JS-heavy fetch", "dynamic/browser-like extraction", "robust fetch fallback"],
     },
 }
-MAIN_SEARCH_FALLBACK_CHAIN = ["xai-responses", "openai-compatible"]
 OPERATION_PROFILES: dict[str, dict[str, Any]] = {
-    "search.answer": {"providers": ["xai-responses", "openai-compatible"], "features": set()},
-    "search.sources": {"providers": ["exa", "zhipu", "zhipu-mcp", "tavily", "firecrawl"], "features": set()},
-    "search.similar": {"providers": ["exa"], "features": set()},
-    "docs.resolve": {"providers": ["context7"], "features": set()},
-    "docs.search": {"providers": ["context7", "exa", "zhipu-mcp-zread"], "features": set()},
-    "docs.tree": {"providers": ["zhipu-mcp-zread"], "features": set()},
-    "docs.read": {"providers": ["zhipu-mcp-zread"], "features": set()},
-    "fetch.content": {"providers": ["tavily", "jina", "zhipu-mcp-reader", "firecrawl"], "features": set()},
-    "fetch.extract": {"providers": ["firecrawl"], "features": {"structured", "max_length"}},
-    "map.site": {"providers": ["tavily"], "features": {"instructions", "max_depth", "max_breadth", "limit", "timeout"}},
-}
-PROVIDER_OPERATION_FEATURES: dict[str, dict[str, set[str]]] = {
-    "exa": {
-        "search.sources": {"semantic", "keyword", "auto", "time", "domains", "category", "text", "highlights", "limit"},
-        "search.similar": {"limit"},
-        "docs.search": {"domains", "highlights", "limit"},
-    },
-    "zhipu": {"search.sources": {"time", "domains", "limit"}},
-    "zhipu-mcp": {"search.sources": {"limit"}},
-    "tavily": {"search.sources": {"limit"}, "fetch.content": set(), "map.site": OPERATION_PROFILES["map.site"]["features"]},
-    "firecrawl": {"search.sources": {"limit"}, "fetch.content": set(), "fetch.extract": {"structured", "max_length"}},
-    "context7": {"docs.resolve": set(), "docs.search": set()},
-    "zhipu-mcp-zread": {"docs.search": set(), "docs.tree": {"path", "ref"}, "docs.read": {"ref"}},
-    "jina": {"fetch.content": set()},
-    "zhipu-mcp-reader": {"fetch.content": set()},
-    "xai-responses": {"search.answer": set()},
-    "openai-compatible": {"search.answer": {"stream"}},
+    "search.answer": {"executor": "search_answer", "responsible_provider": "grok", "required_config": ["SMART_SEARCH_GROK_TRANSPORT"], "default_timeout": 120.0, "normalizer": "answer"},
+    "search.sources": {"executor": "search_sources", "responsible_provider": "exa", "required_config": ["EXA_API_KEY"], "default_timeout": 30.0, "normalizer": "results"},
+    "docs.resolve": {"executor": "docs_resolve", "responsible_provider": "context7", "required_config": ["CONTEXT7_API_KEY"], "default_timeout": 30.0, "normalizer": "candidates"},
+    "docs.search": {"executor": "docs_search", "responsible_provider": "context7-or-zread", "required_config": [], "default_timeout": 30.0, "normalizer": "results"},
+    "docs.tree": {"executor": "docs_tree", "responsible_provider": "zhipu-mcp-zread", "required_config": ["ZHIPU_MCP_API_KEY"], "default_timeout": 30.0, "normalizer": "entries"},
+    "docs.read": {"executor": "docs_read", "responsible_provider": "zhipu-mcp-zread", "required_config": ["ZHIPU_MCP_API_KEY"], "default_timeout": 30.0, "normalizer": "content"},
+    "fetch.content": {"executor": "fetch_content", "responsible_provider": "firecrawl", "required_config": ["FIRECRAWL_API_KEY"], "default_timeout": 90.0, "normalizer": "content"},
+    "fetch.extract": {"executor": "fetch_extract", "responsible_provider": "firecrawl", "required_config": ["FIRECRAWL_API_KEY"], "default_timeout": 90.0, "normalizer": "data"},
+    "map.site": {"executor": "map_site_operation", "responsible_provider": "firecrawl", "required_config": ["FIRECRAWL_API_KEY"], "default_timeout": 150.0, "normalizer": "entries"},
 }
 MAIN_SEARCH_PROVIDER_ALIASES = {
     "xai-responses": {"xai-responses", "xai", "grok", "grok-web-tools"},
@@ -435,75 +416,19 @@ def _fallback_used(attempts: list[dict]) -> bool:
 
 
 def provider_profiles() -> dict[str, dict[str, Any]]:
-    profiles = {provider: dict(profile) for provider, profile in PROVIDER_PROFILES.items()}
-    for provider, profile in profiles.items():
-        operations = PROVIDER_OPERATION_FEATURES.get(provider, {})
-        profile["operations"] = sorted(operations)
-        profile["operation_features"] = {
-            operation: sorted(features)
-            for operation, features in operations.items()
-        }
-    return profiles
+    return {provider: dict(profile) for provider, profile in PROVIDER_PROFILES.items()}
 
 
 def operation_profiles() -> dict[str, dict[str, Any]]:
-    return {
-        operation: {
-            "providers": list(profile["providers"]),
-            "features": sorted(profile.get("features", set())),
-        }
-        for operation, profile in OPERATION_PROFILES.items()
-    }
-
-
-def _operation_provider_configured(provider: str) -> bool:
-    if provider == "zhipu-mcp-zread":
-        return bool(config.zhipu_mcp_api_key)
-    return _provider_configured(provider)
+    return {operation: dict(profile) for operation, profile in OPERATION_PROFILES.items()}
 
 
 def operation_policy(operation: str) -> dict[str, Any]:
-    raw = config.operation_config.get(operation, {})
-    fallback_value = raw.get("fallback", True)
-    fallback = str(fallback_value).strip().lower() not in {"false", "0", "off", "no"}
-    try:
-        timeout = float(raw.get("timeout", 90.0))
-    except (TypeError, ValueError):
-        timeout = 90.0
-    if timeout <= 0:
-        timeout = 90.0
-    return {"fallback": fallback, "timeout": timeout}
-
-
-def operation_candidates(
-    operation: str,
-    *,
-    required_features: set[str] | None = None,
-) -> tuple[list[str], set[str]]:
     profile = OPERATION_PROFILES.get(operation)
     if not profile:
-        return [], set(required_features or set())
-    operation_config = config.operation_config.get(operation, {})
-    configured_order = operation_config.get("providers")
-    providers = list(configured_order) if isinstance(configured_order, list) else list(profile["providers"])
-    disabled = set(operation_config.get("disabled") or [])
-    required = set(required_features or set())
-    candidates: list[str] = []
-    eligible: list[str] = []
-    supported_features: set[str] = set()
-    for provider in providers:
-        provider = str(provider).strip().lower()
-        if provider in disabled or provider not in profile["providers"] or not _operation_provider_configured(provider):
-            continue
-        eligible.append(provider)
-        supported = PROVIDER_OPERATION_FEATURES.get(provider, {}).get(operation, set())
-        supported_features.update(supported)
-        if required.issubset(supported):
-            candidates.append(provider)
-    if not operation_policy(operation)["fallback"]:
-        candidates = candidates[:1]
-    missing = required - supported_features if eligible and not candidates else set()
-    return candidates, missing
+        raise ValueError(f"Unknown operation: {operation}")
+    timeout = config.operation_timeouts.get(operation, float(profile["default_timeout"]))
+    return {"timeout": timeout}
 
 
 async def _await_operation(awaitable: Any, *, start: float, timeout: float) -> Any:
@@ -511,45 +436,6 @@ async def _await_operation(awaitable: Any, *, start: float, timeout: float) -> A
     if remaining <= 0:
         raise asyncio.TimeoutError("operation timeout budget exhausted")
     return await asyncio.wait_for(awaitable, timeout=remaining)
-
-
-async def _run_operation_candidates(
-    operation: str,
-    candidates: list[str],
-    invoke: Any,
-    *,
-    start: float,
-) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
-    attempts: list[dict[str, Any]] = []
-    timeout = operation_policy(operation)["timeout"]
-    for provider in candidates:
-        attempt_start = time.time()
-        try:
-            data = await _await_operation(invoke(provider), start=start, timeout=timeout)
-        except (asyncio.TimeoutError, httpx.TimeoutException, TimeoutError) as exc:
-            attempts.append(_attempt(operation, provider, "error", attempt_start, error_type="timeout", error=str(exc)))
-            continue
-        except Exception as exc:
-            attempts.append(_attempt(operation, provider, "error", attempt_start, error_type="network_error", error=str(exc)))
-            continue
-        if data.get("ok"):
-            count = len(data.get("results") or data.get("entries") or []) or 1
-            attempts.append(_attempt(operation, provider, "ok", attempt_start, result_count=count))
-            return data, attempts
-        error_type = str(data.get("error_type") or "")
-        attempts.append(
-            _attempt(
-                operation,
-                provider,
-                "error" if error_type else "empty",
-                attempt_start,
-                error_type=error_type,
-                error=str(data.get("error") or ""),
-            )
-        )
-        if error_type == "parameter_error":
-            return data, attempts
-    return None, attempts
 
 
 def _operation_envelope(
@@ -581,6 +467,42 @@ def _operation_envelope(
         for key in ("provider_attempts", "providers_used", "routing_decision", "capability_status", "minimum_profile_ok", "fallback_used", "transport_fallback_used", "model_fallback_used"):
             data.pop(key, None)
     return data
+
+
+def _redact_sensitive(text: str) -> str:
+    redacted = str(text or "")
+    for secret in (
+        config.xai_api_key,
+        config.openai_compatible_api_key,
+        config.exa_api_key,
+        config.context7_api_key,
+        config.zhipu_mcp_api_key,
+        config.firecrawl_api_key,
+    ):
+        if secret:
+            redacted = redacted.replace(secret, "***")
+    return redacted
+
+
+def _operation_exception(exc: BaseException) -> tuple[str, str]:
+    if isinstance(exc, (asyncio.TimeoutError, httpx.TimeoutException, TimeoutError)):
+        return "timeout", "operation timed out"
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        if status in {400, 422}:
+            error_type = "parameter_error"
+        elif status in {401, 403}:
+            error_type = "auth_error"
+        elif status == 429:
+            error_type = "rate_limited"
+        elif status >= 500:
+            error_type = "network_error"
+        else:
+            error_type = "provider_error"
+        return error_type, _redact_sensitive(f"HTTP {status}: {exc.response.text[:300]}")
+    if isinstance(exc, httpx.RequestError):
+        return "network_error", _redact_sensitive(str(exc))
+    return "provider_error", _redact_sensitive(str(exc))
 
 
 def intent_router_status() -> dict[str, Any]:
@@ -2134,7 +2056,7 @@ async def map_site(
 async def exa_search(
     query: str,
     num_results: int = 5,
-    search_type: str = "neural",
+    search_type: str = "auto",
     include_text: bool = False,
     include_highlights: bool = False,
     start_published_date: str = "",
@@ -2218,36 +2140,16 @@ async def zhipu_mcp_reader(url: str) -> dict[str, Any]:
     return await _decode_provider_json(await _zhipu_mcp_reader_provider().web_reader(url), provider="zhipu-mcp-reader")
 
 
-async def zhipu_mcp_search_doc(repo: str, query: str, max_results: int = 5) -> dict[str, Any]:
-    return await _decode_provider_json(await _zhipu_mcp_zread_provider().search_doc(repo, query, max_results=max_results), provider="zhipu-mcp-zread")
+async def zhipu_mcp_search_doc(repo: str, query: str, *, language: str = "en") -> dict[str, Any]:
+    return await _decode_provider_json(await _zhipu_mcp_zread_provider().search_doc(repo, query, language=language), provider="zhipu-mcp-zread")
 
 
-async def zhipu_mcp_repo_structure(repo: str, path: str = "", ref: str = "") -> dict[str, Any]:
-    return await _decode_provider_json(await _zhipu_mcp_zread_provider().get_repo_structure(repo, path=path, ref=ref), provider="zhipu-mcp-zread")
+async def zhipu_mcp_repo_structure(repo: str, path: str = "") -> dict[str, Any]:
+    return await _decode_provider_json(await _zhipu_mcp_zread_provider().get_repo_structure(repo, path=path), provider="zhipu-mcp-zread")
 
 
-async def zhipu_mcp_read_file(repo: str, path: str, ref: str = "") -> dict[str, Any]:
-    return await _decode_provider_json(await _zhipu_mcp_zread_provider().read_file(repo, path, ref=ref), provider="zhipu-mcp-zread")
-
-
-async def exa_find_similar(url: str, num_results: int = 5) -> dict[str, Any]:
-    api_key = config.exa_api_key
-    if not api_key:
-        return {
-            "ok": False,
-            "error_type": "config_error",
-            "error": "EXA_API_KEY 未配置。请运行 `smart-search setup`，或使用 `smart-search config set EXA_API_KEY <key>`。",
-        }
-
-    provider = ExaSearchProvider(config.exa_base_url, api_key, config.exa_timeout)
-    raw = await provider.find_similar(url=url, num_results=num_results)
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        return {"ok": False, "error_type": "parse_error", "error": raw}
-    if not data.get("ok", False):
-        data.setdefault("error_type", "network_error")
-    return data
+async def zhipu_mcp_read_file(repo: str, path: str) -> dict[str, Any]:
+    return await _decode_provider_json(await _zhipu_mcp_zread_provider().read_file(repo, path), provider="zhipu-mcp-zread")
 
 
 async def zhipu_search(
@@ -2326,47 +2228,41 @@ async def context7_docs(library_id: str, query: str) -> dict[str, Any]:
     return data
 
 
-async def search_answer(query: str, *, stream: bool | None = None, timeout_seconds: float | None = None, debug: bool = False) -> dict[str, Any]:
+async def search_answer(query: str, *, timeout_seconds: float | None = None, debug: bool = False) -> dict[str, Any]:
     start = time.time()
-    candidates, _ = operation_candidates("search.answer")
-    if not candidates:
-        return _operation_envelope(
-            "search",
-            "answer",
-            ok=False,
-            start=start,
-            error_type="config_error",
-            error="No configured provider supports search.answer",
-        )
-    policy = operation_policy("search.answer")
-    budget = min(timeout_seconds, policy["timeout"]) if timeout_seconds else policy["timeout"]
-    data = await search(
-        query,
-        stream=stream,
-        timeout_seconds=budget,
-        providers=",".join(candidates),
-        fallback="auto" if policy["fallback"] else "off",
-        enforce_minimum_profile=False,
-    )
-    return _operation_envelope(
-        "search",
-        "answer",
-        ok=bool(data.get("ok")),
-        start=start,
-        content=data.get("content", ""),
-        sources=data.get("sources") or [],
-        error_type=data.get("error_type", ""),
-        error=data.get("error", ""),
-        extra=data,
-        debug=debug,
-    )
+    try:
+        transport = config.grok_transport
+    except ValueError as exc:
+        return _operation_envelope("search", "answer", ok=False, start=start, error_type="config_error", error=str(exc))
+    budget = operation_policy("search.answer")["timeout"]
+    if timeout_seconds is not None:
+        if timeout_seconds <= 0:
+            return _operation_envelope("search", "answer", ok=False, start=start, error_type="parameter_error", error="--timeout must be positive")
+        budget = min(float(timeout_seconds), budget)
+    if transport == "xai-responses":
+        if not config.xai_api_key:
+            return _operation_envelope("search", "answer", ok=False, start=start, error_type="config_error", error="search.answer requires XAI_API_KEY; run `smart-search diagnose search answer`")
+        provider: Any = XAIResponsesSearchProvider(config.xai_api_url, config.xai_api_key, config.xai_model, config.parse_xai_tools())
+    else:
+        missing = [key for key, value in (("OPENAI_COMPATIBLE_API_URL", config.openai_compatible_api_url), ("OPENAI_COMPATIBLE_API_KEY", config.openai_compatible_api_key), ("OPENAI_COMPATIBLE_MODEL", config.openai_compatible_model)) if not value]
+        if missing:
+            return _operation_envelope("search", "answer", ok=False, start=start, error_type="config_error", error=f"search.answer requires {', '.join(missing)}; run `smart-search diagnose search answer`")
+        provider = OpenAICompatibleSearchProvider(config.openai_compatible_api_url or "", config.openai_compatible_api_key or "", config.openai_compatible_model, config.openai_compatible_stream)
+    try:
+        raw = await _await_operation(provider.search(query), start=start, timeout=budget)
+        content, sources = split_answer_and_sources(str(raw))
+        if not content:
+            return _operation_envelope("search", "answer", ok=False, start=start, error_type="provider_error", error="Grok returned empty content", debug=debug)
+        return _operation_envelope("search", "answer", ok=True, start=start, content=content, sources=sources, extra={"provider": transport} if debug else None, debug=debug)
+    except Exception as exc:
+        error_type, error = _operation_exception(exc)
+        return _operation_envelope("search", "answer", ok=False, start=start, error_type=error_type, error=error, extra={"provider": transport} if debug else None, debug=debug)
 
 
 async def search_sources(
     query: str,
     *,
     limit: int = 5,
-    mode: str = "auto",
     start_published_date: str = "",
     include_domains: list[str] | None = None,
     exclude_domains: list[str] | None = None,
@@ -2376,111 +2272,29 @@ async def search_sources(
     debug: bool = False,
 ) -> dict[str, Any]:
     start = time.time()
-    required: set[str] = set()
-    if mode in {"semantic", "keyword"}:
-        required.add(mode)
-    if start_published_date:
-        required.add("time")
-    if include_domains or exclude_domains:
-        required.add("domains")
-    if category:
-        required.add("category")
-    if include_text:
-        required.add("text")
-    if include_highlights:
-        required.add("highlights")
-    candidates, missing = operation_candidates("search.sources", required_features=required)
-    if not candidates:
-        error_type = "capability_error" if missing else "config_error"
-        detail = f"; missing features: {', '.join(sorted(missing))}" if missing else ""
-        return _operation_envelope(
-            "search",
-            "sources",
-            ok=False,
-            start=start,
-            error_type=error_type,
-            error=f"No configured provider supports search.sources{detail}",
-        )
-
-    async def invoke(provider: str) -> dict[str, Any]:
-        if provider == "exa":
-            data = await exa_search(
-                query,
-                num_results=limit,
-                search_type="neural" if mode == "semantic" else mode,
-                include_text=include_text,
-                include_highlights=include_highlights,
-                start_published_date=start_published_date,
-                include_domains=include_domains or "",
-                exclude_domains=exclude_domains or "",
-                category=category,
-            )
-            results = _normalize_source_results(data.get("results"), provider) if data.get("ok") else []
-        elif provider == "zhipu":
-            data = await zhipu_search(
-                query,
-                count=limit,
-                search_recency_filter=start_published_date or "noLimit",
-                search_domain_filter=(include_domains or [""])[0],
-            )
-            results = _normalize_source_results(data.get("results"), provider) if data.get("ok") else []
-        elif provider == "zhipu-mcp":
-            data = await zhipu_mcp_search(query, count=limit)
-            results = _normalize_source_results(data.get("results"), provider) if data.get("ok") else []
-        elif provider == "tavily":
-            raw = await call_tavily_search(query, limit)
-            data = {"ok": bool(raw)}
-            results = _normalize_source_results(raw, provider)
-        else:
-            raw = await call_firecrawl_search(query, limit)
-            data = {"ok": bool(raw)}
-            results = _normalize_source_results(raw, provider)
-        return {**data, "ok": bool(results), "results": results}
-
-    data, attempts = await _run_operation_candidates("search.sources", candidates, invoke, start=start)
-    if data and data.get("ok"):
-        results = data.get("results") or []
-        return _operation_envelope(
-            "search",
-            "sources",
-            ok=True,
-            start=start,
-            sources=results,
-            extra={"results": results, "provider_attempts": attempts},
-            debug=debug,
-        )
-    return _operation_envelope(
-        "search",
-        "sources",
-        ok=False,
-        start=start,
-        error_type=(data or {}).get("error_type", "network_error"),
-        error=(data or {}).get("error", "All search.sources providers failed"),
-        extra={"provider_attempts": attempts},
-        debug=debug,
-    )
-async def search_similar(url: str, *, limit: int = 5, debug: bool = False) -> dict[str, Any]:
-    start = time.time()
-    candidates, _ = operation_candidates("search.similar")
-    if not candidates:
-        return _operation_envelope("search", "similar", ok=False, start=start, error_type="config_error", error="No configured provider supports search.similar")
+    if not config.exa_api_key:
+        return _operation_envelope("search", "sources", ok=False, start=start, error_type="config_error", error="search.sources requires EXA_API_KEY; run `smart-search diagnose search sources`")
+    if limit < 1:
+        return _operation_envelope("search", "sources", ok=False, start=start, error_type="parameter_error", error="--limit must be positive")
     try:
         data = await _await_operation(
-            exa_find_similar(url, num_results=limit),
+            exa_search(query, num_results=limit, search_type=config.exa_search_type, include_text=include_text, include_highlights=include_highlights, start_published_date=start_published_date, include_domains=include_domains or "", exclude_domains=exclude_domains or "", category=category),
             start=start,
-            timeout=operation_policy("search.similar")["timeout"],
+            timeout=operation_policy("search.sources")["timeout"],
         )
-    except (asyncio.TimeoutError, httpx.TimeoutException, TimeoutError):
-        data = {"ok": False, "error_type": "timeout", "error": "search.similar timed out"}
+    except ValueError as exc:
+        data = {"ok": False, "error_type": "config_error", "error": str(exc)}
+    except Exception as exc:
+        error_type, error = _operation_exception(exc)
+        data = {"ok": False, "error_type": error_type, "error": error}
     results = _normalize_source_results(data.get("results"), "exa") if data.get("ok") else []
-    return _operation_envelope("search", "similar", ok=bool(results), start=start, sources=results, error_type=data.get("error_type", "network_error"), error=data.get("error", ""), extra={"results": results}, debug=debug)
+    return _operation_envelope("search", "sources", ok=bool(data.get("ok")), start=start, sources=results, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"results": results, **({"provider": "exa"} if debug else {})}, debug=debug)
 
 
 async def docs_resolve(name: str, query: str = "", *, debug: bool = False) -> dict[str, Any]:
     start = time.time()
-    candidates, _ = operation_candidates("docs.resolve")
-    if not candidates:
-        return _operation_envelope("docs", "resolve", ok=False, start=start, error_type="config_error", error="No configured provider supports docs.resolve")
+    if not config.context7_api_key:
+        return _operation_envelope("docs", "resolve", ok=False, start=start, error_type="config_error", error="docs.resolve requires CONTEXT7_API_KEY; run `smart-search diagnose docs resolve`")
     try:
         data = await _await_operation(
             context7_library(name, query),
@@ -2496,122 +2310,62 @@ async def docs_resolve(name: str, query: str = "", *, debug: bool = False) -> di
 
 async def docs_search(query: str, *, source: str = "", debug: bool = False) -> dict[str, Any]:
     start = time.time()
-    candidates, _ = operation_candidates("docs.search")
-    if source and "/" in source:
-        candidates = [provider for provider in candidates if provider == "zhipu-mcp-zread"] + [
-            provider for provider in candidates if provider != "zhipu-mcp-zread"
-        ]
-    if not candidates:
-        return _operation_envelope(
-            "docs",
-            "search",
-            ok=False,
-            start=start,
-            error_type="config_error",
-            error="No configured provider supports docs.search",
-            extra={"results": []},
-        )
+    repo_pattern = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+    context7_pattern = re.compile(r"^/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?$")
+    if source and repo_pattern.fullmatch(source):
+        if not config.zhipu_mcp_api_key:
+            return _operation_envelope("docs", "search", ok=False, start=start, error_type="config_error", error="repository docs.search requires ZHIPU_MCP_API_KEY; run `smart-search diagnose docs search`", extra={"results": []})
+        language = "zh" if re.search(r"[\u3400-\u9fff]", query) else "en"
+        try:
+            data = await _await_operation(zhipu_mcp_search_doc(source, query, language=language), start=start, timeout=operation_policy("docs.search")["timeout"])
+        except Exception as exc:
+            error_type, error = _operation_exception(exc)
+            data = {"ok": False, "error_type": error_type, "error": error}
+        results = _normalize_source_results(data.get("results"), "zhipu-mcp-zread") if data.get("ok") else []
+        return _operation_envelope("docs", "search", ok=bool(data.get("ok")), start=start, content=data.get("content", ""), sources=results, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"results": results, **({"provider": "zhipu-mcp-zread"} if debug else {})}, debug=debug)
+    if source and not context7_pattern.fullmatch(source):
+        return _operation_envelope("docs", "search", ok=False, start=start, error_type="parameter_error", error="--source must be a Context7 library id (/owner/library) or GitHub repository (owner/repo)", extra={"results": []})
+    if not config.context7_api_key:
+        return _operation_envelope("docs", "search", ok=False, start=start, error_type="config_error", error="docs.search requires CONTEXT7_API_KEY; run `smart-search diagnose docs search`", extra={"results": []})
+    library_id = source
+    if not library_id:
+        resolved = await context7_library(query, query)
+        if not resolved.get("ok"):
+            return _operation_envelope("docs", "search", ok=False, start=start, error_type=resolved.get("error_type", "provider_error"), error=resolved.get("error", "Context7 library resolution failed"), extra={"results": []})
+        library_id = next((row.get("id", "") for row in resolved.get("results", []) if row.get("id")), "")
+    data = await context7_docs(library_id, query) if library_id else {"ok": False, "error_type": "provider_error", "error": "Context7 library not resolved"}
+    results = []
+    if data.get("ok"):
+        for index, row in enumerate(data.get("results") or [], 1):
+            text = row.get("content") or row.get("code") or row.get("description") or json.dumps(row, ensure_ascii=False)
+            results.append({"url": f"context7:{library_id}#{index}", "title": row.get("title") or library_id, "description": str(text)[:500], "snippet": str(text)[:500], "provider": "context7"})
+        if not results and data.get("content"):
+            results.append({"url": f"context7:{library_id}", "title": library_id, "description": data["content"][:500], "snippet": data["content"][:500], "provider": "context7"})
+    return _operation_envelope("docs", "search", ok=bool(data.get("ok")), start=start, content=data.get("content", ""), sources=results, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"results": results, **({"provider": "context7"} if debug else {})}, debug=debug)
 
-    async def invoke(provider: str) -> dict[str, Any]:
-        if provider == "zhipu-mcp-zread" and source:
-            data = await zhipu_mcp_search_doc(source, query)
-            results = _normalize_source_results(data.get("results"), provider) if data.get("ok") else []
-        elif provider == "context7":
-            library_id = source
-            if not library_id:
-                resolved = await context7_library(query, query)
-                library_id = next((row.get("id", "") for row in resolved.get("results", []) if row.get("id")), "")
-            data = await context7_docs(library_id, query) if library_id else {
-                "ok": False,
-                "error": "library not resolved",
-            }
-            results = []
-            if data.get("ok"):
-                for index, row in enumerate(data.get("results") or [], 1):
-                    text = row.get("content") or row.get("code") or row.get("description") or json.dumps(row, ensure_ascii=False)
-                    results.append(
-                        {
-                            "url": f"context7:{library_id}#{index}",
-                            "title": row.get("title") or library_id,
-                            "description": str(text)[:500],
-                            "snippet": str(text)[:500],
-                            "provider": provider,
-                        }
-                    )
-                if not results and data.get("content"):
-                    results.append(
-                        {
-                            "url": f"context7:{library_id}",
-                            "title": library_id,
-                            "description": data["content"][:500],
-                            "snippet": data["content"][:500],
-                            "provider": provider,
-                        }
-                    )
-        elif provider == "exa":
-            data = await exa_search(
-                query,
-                num_results=5,
-                include_highlights=True,
-                include_domains=[source] if source and "." in source and "/" not in source else "",
-            )
-            results = _normalize_source_results(data.get("results"), provider) if data.get("ok") else []
-        else:
-            return {"ok": False, "error_type": "capability_error", "error": f"{provider} cannot satisfy docs.search"}
-        return {**data, "ok": bool(results), "results": results}
 
-    data, attempts = await _run_operation_candidates("docs.search", candidates, invoke, start=start)
-    if data and data.get("ok"):
-        results = data.get("results") or []
-        return _operation_envelope(
-            "docs",
-            "search",
-            ok=True,
-            start=start,
-            sources=results,
-            extra={"results": results, "provider_attempts": attempts},
-            debug=debug,
-        )
-    return _operation_envelope(
-        "docs",
-        "search",
-        ok=False,
-        start=start,
-        error_type=(data or {}).get("error_type", "network_error"),
-        error=(data or {}).get("error", "No docs.search provider returned results"),
-        extra={"results": [], "provider_attempts": attempts},
-        debug=debug,
-    )
-async def docs_tree(repo: str, *, path: str = "", ref: str = "", debug: bool = False) -> dict[str, Any]:
+async def docs_tree(repo: str, *, path: str = "", debug: bool = False) -> dict[str, Any]:
     start = time.time()
-    candidates, _ = operation_candidates("docs.tree")
-    if not candidates:
-        return _operation_envelope("docs", "tree", ok=False, start=start, error_type="config_error", error="No configured provider supports docs.tree", extra={"entries": []})
+    if not config.zhipu_mcp_api_key:
+        return _operation_envelope("docs", "tree", ok=False, start=start, error_type="config_error", error="docs.tree requires ZHIPU_MCP_API_KEY; run `smart-search diagnose docs tree`", extra={"entries": []})
     try:
-        data = await _await_operation(
-            zhipu_mcp_repo_structure(repo, path=path, ref=ref),
-            start=start,
-            timeout=operation_policy("docs.tree")["timeout"],
-        )
-    except (asyncio.TimeoutError, httpx.TimeoutException, TimeoutError):
-        data = {"ok": False, "error_type": "timeout", "error": "docs.tree timed out"}
+        data = await _await_operation(zhipu_mcp_repo_structure(repo, path=path), start=start, timeout=operation_policy("docs.tree")["timeout"])
+    except Exception as exc:
+        error_type, error = _operation_exception(exc)
+        data = {"ok": False, "error_type": error_type, "error": error}
     entries = data.get("results") or []
     return _operation_envelope("docs", "tree", ok=bool(data.get("ok")), start=start, content=data.get("content", ""), error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"entries": entries}, debug=debug)
 
 
-async def docs_read(repo: str, path: str, *, ref: str = "", debug: bool = False) -> dict[str, Any]:
+async def docs_read(repo: str, path: str, *, debug: bool = False) -> dict[str, Any]:
     start = time.time()
-    candidates, _ = operation_candidates("docs.read")
-    if not candidates:
-        return _operation_envelope("docs", "read", ok=False, start=start, error_type="config_error", error="No configured provider supports docs.read")
+    if not config.zhipu_mcp_api_key:
+        return _operation_envelope("docs", "read", ok=False, start=start, error_type="config_error", error="docs.read requires ZHIPU_MCP_API_KEY; run `smart-search diagnose docs read`")
     try:
-        data = await _await_operation(
-            zhipu_mcp_read_file(repo, path, ref=ref),
-            start=start,
-            timeout=operation_policy("docs.read")["timeout"],
-        )
-    except (asyncio.TimeoutError, httpx.TimeoutException, TimeoutError):
-        data = {"ok": False, "error_type": "timeout", "error": "docs.read timed out"}
+        data = await _await_operation(zhipu_mcp_read_file(repo, path), start=start, timeout=operation_policy("docs.read")["timeout"])
+    except Exception as exc:
+        error_type, error = _operation_exception(exc)
+        data = {"ok": False, "error_type": error_type, "error": error}
     return _operation_envelope("docs", "read", ok=bool(data.get("ok")), start=start, content=data.get("content", ""), error_type=data.get("error_type", ""), error=data.get("error", ""), sources=[{"title": path, "url": f"repo:{repo}/{path}", "snippet": ""}], debug=debug)
 
 

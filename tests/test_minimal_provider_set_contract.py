@@ -124,6 +124,38 @@ def test_invalid_exa_search_type_is_rejected(monkeypatch, value):
         _ = config.exa_search_type
 
 
+@pytest.mark.parametrize("value", ["xai-responses", "openai-compatible"])
+def test_grok_transport_tracks_config_source(monkeypatch, value):
+    monkeypatch.setenv("SMART_SEARCH_GROK_TRANSPORT", value)
+    config = _fresh_config(monkeypatch)
+    assert config.grok_transport == value
+    assert config.get_config_source("SMART_SEARCH_GROK_TRANSPORT") == "environment"
+
+
+def test_invalid_grok_transport_is_rejected(monkeypatch):
+    monkeypatch.setenv("SMART_SEARCH_GROK_TRANSPORT", "auto")
+    config = _fresh_config(monkeypatch)
+    with pytest.raises(ValueError, match="SMART_SEARCH_GROK_TRANSPORT"):
+        _ = config.grok_transport
+
+
+def test_operation_timeouts_only_accept_known_operations(monkeypatch):
+    monkeypatch.setenv(
+        "SMART_SEARCH_OPERATION_TIMEOUTS",
+        '{"search.sources":12,"docs.tree":30}',
+    )
+    config = _fresh_config(monkeypatch)
+    assert config.operation_timeouts == {"search.sources": 12.0, "docs.tree": 30.0}
+
+    monkeypatch.setenv("SMART_SEARCH_OPERATION_TIMEOUTS", '{"search.similar":12}')
+    with pytest.raises(ValueError, match="search.similar"):
+        _ = config.operation_timeouts
+
+    monkeypatch.setenv("SMART_SEARCH_OPERATION_TIMEOUTS", '{"search.sources":{"providers":["exa"]}}')
+    with pytest.raises(ValueError, match="positive number"):
+        _ = config.operation_timeouts
+
+
 def test_operation_descriptors_have_one_responsible_provider():
     profiles = service.operation_profiles()
     expected = {
@@ -140,6 +172,11 @@ def test_operation_descriptors_have_one_responsible_provider():
     assert set(profiles) == set(expected)
     assert {name: profile["responsible_provider"] for name, profile in profiles.items()} == expected
     assert not hasattr(service, "operation_candidates")
+
+
+def test_operation_error_redacts_configured_secrets(monkeypatch):
+    monkeypatch.setenv("EXA_API_KEY", "exa-secret-value")
+    assert service._redact_sensitive("upstream echoed exa-secret-value") == "upstream echoed ***"
 
 
 @pytest.mark.asyncio

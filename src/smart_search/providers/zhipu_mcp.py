@@ -190,7 +190,7 @@ class ZhipuMCPProvider:
             "raw_content": text,
             "elapsed_ms": _elapsed_ms(start),
         }
-        for key in ("query", "url", "repo", "path", "ref"):
+        for key in ("query", "url", "repo_name", "dir_path", "file_path", "language"):
             if arguments.get(key):
                 output[key] = arguments[key]
         if name == "webReader":
@@ -204,27 +204,15 @@ class ZhipuMCPProvider:
             output["error"] = content_error[1] if content_error else (text or "Zhipu MCP tool returned isError=true")
         return output
 
-    async def web_search(self, query: str, count: int = 5) -> str:
-        del count
-        return await self.call_tool("web_search_prime", {"search_query": query})
+    async def search_doc(self, repo: str, query: str, language: str = "en") -> str:
+        return await self.call_tool("search_doc", {"repo_name": repo, "query": query, "language": language})
 
-    async def web_reader(self, url: str) -> str:
-        return await self.call_tool("webReader", {"url": url})
-
-    async def search_doc(self, repo: str, query: str, max_results: int = 5) -> str:
-        del max_results
-        return await self.call_tool("search_doc", {"repo_name": repo, "query": query})
-
-    async def get_repo_structure(self, repo: str, path: str = "", ref: str = "") -> str:
+    async def get_repo_structure(self, repo: str, path: str = "") -> str:
         arguments = {"repo_name": repo}
         if path:
             arguments["dir_path"] = path
-        if ref:
-            arguments["ref"] = ref
         return await self.call_tool("get_repo_structure", arguments)
 
-    async def read_file(self, repo: str, path: str, ref: str = "") -> str:
+    async def read_file(self, repo: str, path: str) -> str:
         arguments = {"repo_name": repo, "file_path": path}
-        if ref:
-            arguments["ref"] = ref
         return await self.call_tool("read_file", arguments)

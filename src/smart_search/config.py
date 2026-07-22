@@ -13,7 +13,8 @@ class Config:
     _DEFAULT_MODEL = "grok-4-fast"
     _DEFAULT_XAI_TOOLS = "web_search,x_search"
     _DEFAULT_VALIDATION_LEVEL = "balanced"
-    _DEFAULT_FALLBACK_MODE = "auto"
+    _DEFAULT_GROK_TRANSPORT = "openai-compatible"
+    _DEFAULT_EXA_SEARCH_TYPE = "auto"
     _DEFAULT_MINIMUM_PROFILE = "standard"
     _DEFAULT_INTENT_ROUTER_MODE = "hybrid"
     _DEFAULT_INTENT_ROUTER_TIMEOUT_SECONDS = "8"
@@ -21,7 +22,8 @@ class Config:
     _DEFAULT_INTENT_EMBEDDING_MARGIN = "0.05"
     _ALLOWED_XAI_TOOLS = {"web_search", "x_search"}
     _ALLOWED_VALIDATION_LEVELS = {"fast", "balanced", "strict"}
-    _ALLOWED_FALLBACK_MODES = {"auto", "off"}
+    _ALLOWED_GROK_TRANSPORTS = {"xai-responses", "openai-compatible"}
+    _ALLOWED_EXA_SEARCH_TYPES = {"instant", "fast", "auto", "deep-lite", "deep", "deep-reasoning"}
     _ALLOWED_MINIMUM_PROFILES = {"standard", "off"}
     _ALLOWED_INTENT_ROUTER_MODES = {"hybrid", "rules", "off"}
     _CONFIG_KEYS = {
@@ -29,15 +31,14 @@ class Config:
         "XAI_API_KEY",
         "XAI_MODEL",
         "XAI_TOOLS",
+        "SMART_SEARCH_GROK_TRANSPORT",
         "OPENAI_COMPATIBLE_API_URL",
         "OPENAI_COMPATIBLE_API_KEY",
         "OPENAI_COMPATIBLE_MODEL",
-        "OPENAI_COMPATIBLE_FALLBACK_MODELS",
         "OPENAI_COMPATIBLE_STREAM",
         "SMART_SEARCH_VALIDATION_LEVEL",
-        "SMART_SEARCH_FALLBACK_MODE",
         "SMART_SEARCH_MINIMUM_PROFILE",
-        "SMART_SEARCH_OPERATION_CONFIG",
+        "SMART_SEARCH_OPERATION_TIMEOUTS",
         "SMART_SEARCH_INTENT_ROUTER",
         "INTENT_EMBEDDING_API_URL",
         "INTENT_EMBEDDING_API_KEY",
@@ -51,6 +52,7 @@ class Config:
         "EXA_API_KEY",
         "EXA_BASE_URL",
         "EXA_TIMEOUT_SECONDS",
+        "EXA_SEARCH_TYPE",
         "CONTEXT7_API_KEY",
         "CONTEXT7_BASE_URL",
         "CONTEXT7_TIMEOUT_SECONDS",
@@ -73,6 +75,7 @@ class Config:
         "TAVILY_TIMEOUT_SECONDS",
         "FIRECRAWL_API_KEY",
         "FIRECRAWL_API_URL",
+        "FIRECRAWL_TIMEOUT_SECONDS",
         "SMART_SEARCH_DEBUG",
         "SMART_SEARCH_LOG_LEVEL",
         "SMART_SEARCH_LOG_DIR",
@@ -241,10 +244,9 @@ class Config:
             "OPENAI_COMPATIBLE_API_URL",
             "OPENAI_COMPATIBLE_API_KEY",
             "OPENAI_COMPATIBLE_MODEL",
-            "OPENAI_COMPATIBLE_FALLBACK_MODELS",
             "OPENAI_COMPATIBLE_STREAM",
+            "SMART_SEARCH_GROK_TRANSPORT",
             "SMART_SEARCH_VALIDATION_LEVEL",
-            "SMART_SEARCH_FALLBACK_MODE",
             "SMART_SEARCH_MINIMUM_PROFILE",
             "SMART_SEARCH_INTENT_ROUTER",
         }:
@@ -268,10 +270,9 @@ class Config:
             "OPENAI_COMPATIBLE_API_URL",
             "OPENAI_COMPATIBLE_API_KEY",
             "OPENAI_COMPATIBLE_MODEL",
-            "OPENAI_COMPATIBLE_FALLBACK_MODELS",
             "OPENAI_COMPATIBLE_STREAM",
+            "SMART_SEARCH_GROK_TRANSPORT",
             "SMART_SEARCH_VALIDATION_LEVEL",
-            "SMART_SEARCH_FALLBACK_MODE",
             "SMART_SEARCH_MINIMUM_PROFILE",
             "SMART_SEARCH_INTENT_ROUTER",
         }:
@@ -324,6 +325,14 @@ class Config:
         return self._get_config_value("XAI_TOOLS", self._DEFAULT_XAI_TOOLS) or self._DEFAULT_XAI_TOOLS
 
     @property
+    def grok_transport(self) -> str:
+        return self._validated_enum(
+            "SMART_SEARCH_GROK_TRANSPORT",
+            self._DEFAULT_GROK_TRANSPORT,
+            self._ALLOWED_GROK_TRANSPORTS,
+        )
+
+    @property
     def openai_compatible_api_url(self) -> str | None:
         return self._get_config_value("OPENAI_COMPATIBLE_API_URL")
 
@@ -335,24 +344,6 @@ class Config:
     def openai_compatible_model(self) -> str:
         model = self._get_config_value("OPENAI_COMPATIBLE_MODEL") or self._base_model_value()
         return self.apply_model_suffix_for_url(model, self.openai_compatible_api_url or "")
-
-    @property
-    def openai_compatible_fallback_models(self) -> list[str]:
-        raw = self._get_config_value("OPENAI_COMPATIBLE_FALLBACK_MODELS", "") or ""
-        models: list[str] = []
-        seen: set[str] = set()
-        api_url = self.openai_compatible_api_url or ""
-        primary = self.openai_compatible_model
-        for item in raw.split(","):
-            model = item.strip()
-            if not model:
-                continue
-            model = self.apply_model_suffix_for_url(model, api_url)
-            if model == primary or model in seen:
-                continue
-            seen.add(model)
-            models.append(model)
-        return models
 
     @property
     def openai_compatible_stream(self) -> bool:
@@ -427,14 +418,6 @@ class Config:
         )
 
     @property
-    def fallback_mode(self) -> str:
-        return self._validated_enum(
-            "SMART_SEARCH_FALLBACK_MODE",
-            self._DEFAULT_FALLBACK_MODE,
-            self._ALLOWED_FALLBACK_MODES,
-        )
-
-    @property
     def minimum_profile(self) -> str:
         return self._validated_enum(
             "SMART_SEARCH_MINIMUM_PROFILE",
@@ -498,15 +481,40 @@ class Config:
         return values
 
     @property
-    def operation_config(self) -> dict[str, dict]:
-        raw = self._get_config_value("SMART_SEARCH_OPERATION_CONFIG", "{}") or "{}"
+    def operation_timeouts(self) -> dict[str, float]:
+        raw = self._get_config_value("SMART_SEARCH_OPERATION_TIMEOUTS", "{}") or "{}"
         try:
             value = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise ValueError(f"Invalid SMART_SEARCH_OPERATION_CONFIG: {exc}") from exc
+            raise ValueError(f"Invalid SMART_SEARCH_OPERATION_TIMEOUTS: {exc}") from exc
         if not isinstance(value, dict):
-            raise ValueError("Invalid SMART_SEARCH_OPERATION_CONFIG: expected a JSON object")
-        return {str(key): item for key, item in value.items() if isinstance(item, dict)}
+            raise ValueError("Invalid SMART_SEARCH_OPERATION_TIMEOUTS: expected a JSON object")
+        known_operations = {
+            "search.answer",
+            "search.sources",
+            "docs.resolve",
+            "docs.search",
+            "docs.tree",
+            "docs.read",
+            "fetch.content",
+            "fetch.extract",
+            "map.site",
+        }
+        normalized: dict[str, float] = {}
+        for key, item in value.items():
+            operation = str(key)
+            if operation not in known_operations:
+                raise ValueError(f"Invalid SMART_SEARCH_OPERATION_TIMEOUTS operation: {operation}")
+            if isinstance(item, bool):
+                raise ValueError(f"Invalid timeout for {operation}: expected a positive number")
+            try:
+                timeout = float(item)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Invalid timeout for {operation}: expected a positive number") from exc
+            if timeout <= 0:
+                raise ValueError(f"Invalid timeout for {operation}: expected a positive number")
+            normalized[operation] = timeout
+        return normalized
 
     @property
     def tavily_enabled(self) -> bool:
@@ -531,6 +539,10 @@ class Config:
     @property
     def firecrawl_api_key(self) -> str | None:
         return self._get_config_value("FIRECRAWL_API_KEY")
+
+    @property
+    def firecrawl_timeout(self) -> float:
+        return self._float_value("FIRECRAWL_TIMEOUT_SECONDS", "30")
 
     @property
     def log_level(self) -> str:
@@ -593,6 +605,14 @@ class Config:
     @property
     def exa_timeout(self) -> float:
         return float(self._get_config_value("EXA_TIMEOUT_SECONDS", "30") or "30")
+
+    @property
+    def exa_search_type(self) -> str:
+        return self._validated_enum(
+            "EXA_SEARCH_TYPE",
+            self._DEFAULT_EXA_SEARCH_TYPE,
+            self._ALLOWED_EXA_SEARCH_TYPES,
+        )
 
     @property
     def context7_api_key(self) -> str | None:
@@ -669,9 +689,20 @@ class Config:
 
     def get_config_info(self) -> dict:
         config_parameter_errors: list[str] = []
+        grok_transport, grok_transport_error = self._enum_info(
+            "SMART_SEARCH_GROK_TRANSPORT",
+            self._DEFAULT_GROK_TRANSPORT,
+            self._ALLOWED_GROK_TRANSPORTS,
+        )
+        exa_search_type, exa_search_type_error = self._enum_info(
+            "EXA_SEARCH_TYPE",
+            self._DEFAULT_EXA_SEARCH_TYPE,
+            self._ALLOWED_EXA_SEARCH_TYPES,
+        )
         explicit_main_configured = bool(
             self.xai_api_key
-            or (self.openai_compatible_api_url and self.openai_compatible_api_key)
+            if grok_transport == "xai-responses"
+            else self.openai_compatible_api_url and self.openai_compatible_api_key
         )
         if explicit_main_configured:
             config_status = "ok: 配置完整"
@@ -682,11 +713,6 @@ class Config:
             "SMART_SEARCH_VALIDATION_LEVEL",
             self._DEFAULT_VALIDATION_LEVEL,
             self._ALLOWED_VALIDATION_LEVELS,
-        )
-        fallback_mode, fallback_error = self._enum_info(
-            "SMART_SEARCH_FALLBACK_MODE",
-            self._DEFAULT_FALLBACK_MODE,
-            self._ALLOWED_FALLBACK_MODES,
         )
         minimum_profile, minimum_error = self._enum_info(
             "SMART_SEARCH_MINIMUM_PROFILE",
@@ -718,7 +744,8 @@ class Config:
             error
             for error in (
                 validation_error,
-                fallback_error,
+                grok_transport_error,
+                exa_search_type_error,
                 minimum_error,
                 intent_router_error,
                 intent_router_timeout_error,
@@ -735,15 +762,14 @@ class Config:
             "XAI_API_KEY": self._mask_api_key(self.xai_api_key) if self.xai_api_key else "未配置",
             "XAI_MODEL": self.xai_model,
             "XAI_TOOLS": self.xai_tools_raw,
+            "SMART_SEARCH_GROK_TRANSPORT": grok_transport,
             "OPENAI_COMPATIBLE_API_URL": self.openai_compatible_api_url or "未配置",
             "OPENAI_COMPATIBLE_API_KEY": self._mask_api_key(self.openai_compatible_api_key) if self.openai_compatible_api_key else "未配置",
             "OPENAI_COMPATIBLE_MODEL": self.openai_compatible_model,
-            "OPENAI_COMPATIBLE_FALLBACK_MODELS": ",".join(self.openai_compatible_fallback_models),
             "OPENAI_COMPATIBLE_STREAM": self.openai_compatible_stream,
             "SMART_SEARCH_VALIDATION_LEVEL": validation_level,
-            "SMART_SEARCH_FALLBACK_MODE": fallback_mode,
             "SMART_SEARCH_MINIMUM_PROFILE": minimum_profile,
-            "SMART_SEARCH_OPERATION_CONFIG": self.operation_config,
+            "SMART_SEARCH_OPERATION_TIMEOUTS": self.operation_timeouts,
             "SMART_SEARCH_INTENT_ROUTER": intent_router_mode,
             "INTENT_EMBEDDING_API_URL": self.intent_embedding_api_url or "未配置",
             "INTENT_EMBEDDING_API_KEY": self._mask_api_key(self.intent_embedding_api_key) if self.intent_embedding_api_key else "未配置",
@@ -760,36 +786,24 @@ class Config:
             "SMART_SEARCH_RETRY_MAX_ATTEMPTS": self.retry_max_attempts,
             "SMART_SEARCH_RETRY_MULTIPLIER": self.retry_multiplier,
             "SMART_SEARCH_RETRY_MAX_WAIT": self.retry_max_wait,
-            "TAVILY_API_URL": self.tavily_api_url,
-            "TAVILY_ENABLED": self.tavily_enabled,
-            "TAVILY_API_KEY": self._mask_api_key(self.tavily_api_key) if self.tavily_api_key else "未配置",
-            "TAVILY_TIMEOUT_SECONDS": self.tavily_timeout,
             "FIRECRAWL_API_URL": self.firecrawl_api_url,
             "FIRECRAWL_API_KEY": self._mask_api_key(self.firecrawl_api_key) if self.firecrawl_api_key else "未配置",
+            "FIRECRAWL_TIMEOUT_SECONDS": self.firecrawl_timeout,
             "SMART_SEARCH_OUTPUT_CLEANUP": self.output_cleanup_enabled,
             "SMART_SEARCH_LOG_TO_FILE": self.log_to_file_enabled,
             "SSL_VERIFY": self.ssl_verify_enabled,
             "EXA_API_KEY": self._mask_api_key(self.exa_api_key) if self.exa_api_key else "未配置",
             "EXA_BASE_URL": self.exa_base_url,
             "EXA_TIMEOUT_SECONDS": self.exa_timeout,
+            "EXA_SEARCH_TYPE": exa_search_type,
             "CONTEXT7_API_KEY": self._mask_api_key(self.context7_api_key) if self.context7_api_key else "未配置",
             "CONTEXT7_BASE_URL": self.context7_base_url,
             "CONTEXT7_TIMEOUT_SECONDS": self.context7_timeout,
-            "ZHIPU_API_KEY": self._mask_api_key(self.zhipu_api_key) if self.zhipu_api_key else "未配置",
-            "ZHIPU_API_URL": self.zhipu_api_url,
-            "ZHIPU_SEARCH_ENGINE": self.zhipu_search_engine,
-            "ZHIPU_TIMEOUT_SECONDS": self.zhipu_timeout,
             "ZHIPU_MCP_API_KEY": self._mask_api_key(self.zhipu_mcp_api_key) if self.zhipu_mcp_api_key else "未配置",
-            "ZHIPU_MCP_SEARCH_API_URL": self.zhipu_mcp_search_api_url,
-            "ZHIPU_MCP_READER_API_URL": self.zhipu_mcp_reader_api_url,
             "ZHIPU_MCP_ZREAD_API_URL": self.zhipu_mcp_zread_api_url,
             "ZHIPU_MCP_TIMEOUT_SECONDS": self.zhipu_mcp_timeout,
-            "JINA_API_KEY": self._mask_api_key(self.jina_api_key) if self.jina_api_key else "未配置",
-            "JINA_READER_API_URL": self.jina_reader_api_url,
-            "JINA_RESPOND_WITH": self.jina_respond_with,
-            "JINA_TIMEOUT_SECONDS": self.jina_timeout,
-            "primary_api_mode": "xai-responses" if self.xai_api_key else ("chat-completions" if self.openai_compatible_api_url and self.openai_compatible_api_key else "未配置"),
-            "primary_api_mode_source": "config_file" if explicit_main_configured else "default",
+            "primary_api_mode": grok_transport if explicit_main_configured else "未配置",
+            "primary_api_mode_source": self.get_config_source("SMART_SEARCH_GROK_TRANSPORT"),
             "config_file": str(self.config_file),
             "config_dir": str(self.config_file.parent),
             "config_dir_source": self.config_dir_source,

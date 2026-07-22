@@ -9,14 +9,14 @@
 
 ## 2. 确定性配置与 Operation Executor
 
-- [ ] 2.1 添加 `SMART_SEARCH_GROK_TRANSPORT` 的配置解析、允许值校验、脱敏展示和 config source 追踪测试
-- [ ] 2.2 添加 `EXA_SEARCH_TYPE` 当前原生枚举校验与默认 `auto` 测试，并拒绝 `neural|keyword`
-- [ ] 2.3 删除 `SMART_SEARCH_FALLBACK_MODE`、`SMART_SEARCH_OPERATION_CONFIG` provider 链与 `OPENAI_COMPATIBLE_FALLBACK_MODELS` 的执行语义
-- [ ] 2.4 添加仅允许 operation timeout override 的 `SMART_SEARCH_OPERATION_TIMEOUTS` 配置契约与边界测试
-- [ ] 2.5 将 operation profile 重构为固定 executor、必需配置、默认 timeout 与 normalizer descriptor，且不注册 `search.similar`
-- [ ] 2.6 删除 provider candidate、feature negotiation、fallback runner 和 attempts 聚合路径
-- [ ] 2.7 统一固定 executor 的配置、参数、认证、限流、超时、网络、解析与 provider 错误分类并补充脱敏测试
-- [ ] 2.8 运行配置与 operation executor 聚焦测试，检查 diff 后提交确定性路由阶段 commit
+- [x] 2.1 添加 `SMART_SEARCH_GROK_TRANSPORT` 的配置解析、允许值校验、脱敏展示和 config source 追踪测试
+- [x] 2.2 添加 `EXA_SEARCH_TYPE` 当前原生枚举校验与默认 `auto` 测试，并拒绝 `neural|keyword`
+- [x] 2.3 删除 `SMART_SEARCH_FALLBACK_MODE`、`SMART_SEARCH_OPERATION_CONFIG` provider 链与 `OPENAI_COMPATIBLE_FALLBACK_MODELS` 的执行语义
+- [x] 2.4 添加仅允许 operation timeout override 的 `SMART_SEARCH_OPERATION_TIMEOUTS` 配置契约与边界测试
+- [x] 2.5 将 operation profile 重构为固定 executor、必需配置、默认 timeout 与 normalizer descriptor，且不注册 `search.similar`
+- [x] 2.6 删除 provider candidate、feature negotiation、fallback runner 和 attempts 聚合路径
+- [x] 2.7 统一固定 executor 的配置、参数、认证、限流、超时、网络、解析与 provider 错误分类并补充脱敏测试
+- [x] 2.8 运行配置与 operation executor 聚焦测试，检查 diff 后提交确定性路由阶段 commit
 
 ## 3. Search 与 Docs 固定 Provider 实现
 
