@@ -29,6 +29,7 @@ from .intent_router import (
 from .logger import log_info
 from .providers.context7 import Context7Provider
 from .providers.exa import ExaSearchProvider
+from .providers.firecrawl import FirecrawlProvider
 from .providers.jina import JinaReaderProvider
 from .providers.openai_compatible import OpenAICompatibleSearchProvider, get_local_time_info
 from .providers.xai_responses import XAIResponsesSearchProvider
@@ -2371,83 +2372,111 @@ async def docs_read(repo: str, path: str, *, debug: bool = False) -> dict[str, A
 
 async def fetch_content(url: str, *, debug: bool = False) -> dict[str, Any]:
     start = time.time()
-    candidates, _ = operation_candidates("fetch.content")
-    if not candidates:
-        return _operation_envelope(
-            "fetch",
-            "content",
-            ok=False,
-            start=start,
-            error_type="config_error",
-            error="No configured provider supports fetch.content",
-        )
-    policy = operation_policy("fetch.content")
-    try:
-        data = await _await_operation(
-            fetch(
-                url,
-                fallback="auto" if policy["fallback"] else "off",
-                preferred_order=candidates,
-            ),
-            start=start,
-            timeout=policy["timeout"],
-        )
-    except (asyncio.TimeoutError, httpx.TimeoutException, TimeoutError):
-        data = {"ok": False, "error_type": "timeout", "error": "fetch.content timed out"}
-    sources = [{"title": url, "url": url, "snippet": data.get("content", "")[:300]}] if data.get("ok") else []
-    return _operation_envelope("fetch", "content", ok=bool(data.get("ok")), start=start, content=data.get("content", ""), sources=sources, error_type=data.get("error_type", ""), error=data.get("error", ""), extra=data, debug=debug)
-
-
-async def firecrawl_extract(url: str, *, max_length: int = 20000, schema: dict[str, Any] | None = None) -> dict[str, Any]:
     if not config.firecrawl_api_key:
-        return {"ok": False, "error_type": "config_error", "error": "FIRECRAWL_API_KEY is not configured"}
-    json_format: dict[str, Any] = {"type": "json"}
-    if schema:
-        json_format["schema"] = schema
-    body: dict[str, Any] = {"url": url, "formats": [json_format], "timeout": 60000}
+        return _operation_envelope("fetch", "content", ok=False, start=start, error_type="config_error", error="fetch.content requires FIRECRAWL_API_KEY; run `smart-search diagnose fetch content`")
+    provider = FirecrawlProvider(config.firecrawl_api_url, config.firecrawl_api_key, config.firecrawl_timeout)
     try:
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            response = await client.post(f"{config.firecrawl_api_url.rstrip('/')}/scrape", headers={"Authorization": f"Bearer {config.firecrawl_api_key}", "Content-Type": "application/json"}, json=body)
-            response.raise_for_status()
-            payload = response.json().get("data", {})
-        raw = json.dumps(payload, ensure_ascii=False)
-        return {"ok": True, "data": payload.get("json", payload), "raw_evidence": raw[:max_length]}
+        data = await _await_operation(provider.scrape_markdown(url), start=start, timeout=operation_policy("fetch.content")["timeout"])
     except Exception as exc:
-        return {"ok": False, "error_type": "network_error", "error": str(exc)}
+        error_type, error = _operation_exception(exc)
+        data = {"ok": False, "error_type": error_type, "error": error}
+    final_url = data.get("final_url") or url
+    sources = [{"title": final_url, "url": final_url, "snippet": data.get("content", "")[:300]}] if data.get("ok") else []
+    extra = {"final_url": final_url, **({"provider": "firecrawl"} if debug else {})}
+    return _operation_envelope("fetch", "content", ok=bool(data.get("ok")), start=start, content=data.get("content", ""), sources=sources, error_type=data.get("error_type", ""), error=data.get("error", ""), extra=extra, debug=debug)
+
+
+def validate_json_schema(schema: dict[str, Any] | None) -> dict[str, Any] | None:
+    if schema is None:
+        return None
+    if not isinstance(schema, dict):
+        raise ValueError("--schema must be a JSON object")
+    schema_type = schema.get("type")
+    if schema_type is not None and schema_type not in {"object", "array", "string", "number", "integer", "boolean", "null"}:
+        raise ValueError("--schema contains an invalid JSON Schema type")
+    return schema
 
 
 async def fetch_extract(url: str, *, max_length: int = 20000, schema: dict[str, Any] | None = None, debug: bool = False) -> dict[str, Any]:
     start = time.time()
-    candidates, _ = operation_candidates("fetch.extract", required_features={"structured"})
-    if not candidates:
-        return _operation_envelope("fetch", "extract", ok=False, start=start, error_type="config_error", error="No configured provider supports fetch.extract", extra={"data": None})
+    if not config.firecrawl_api_key:
+        return _operation_envelope("fetch", "extract", ok=False, start=start, error_type="config_error", error="fetch.extract requires FIRECRAWL_API_KEY; run `smart-search diagnose fetch extract`", extra={"data": None})
+    if max_length < 0:
+        return _operation_envelope("fetch", "extract", ok=False, start=start, error_type="parameter_error", error="--max-length must be zero or greater", extra={"data": None})
     try:
-        data = await _await_operation(
-            firecrawl_extract(url, max_length=max_length, schema=schema),
-            start=start,
-            timeout=operation_policy("fetch.extract")["timeout"],
-        )
-    except (asyncio.TimeoutError, httpx.TimeoutException, TimeoutError):
-        data = {"ok": False, "error_type": "timeout", "error": "fetch.extract timed out"}
-    return _operation_envelope("fetch", "extract", ok=bool(data.get("ok")), start=start, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"data": data.get("data"), "raw_evidence": data.get("raw_evidence", "")}, debug=debug)
+        valid_schema = validate_json_schema(schema)
+    except ValueError as exc:
+        return _operation_envelope("fetch", "extract", ok=False, start=start, error_type="parameter_error", error=str(exc), extra={"data": None})
+    provider = FirecrawlProvider(config.firecrawl_api_url, config.firecrawl_api_key, config.firecrawl_timeout)
+    try:
+        data = await _await_operation(provider.scrape_json(url, schema=valid_schema, max_length=max_length), start=start, timeout=operation_policy("fetch.extract")["timeout"])
+    except Exception as exc:
+        error_type, error = _operation_exception(exc)
+        data = {"ok": False, "error_type": error_type, "error": error}
+    return _operation_envelope("fetch", "extract", ok=bool(data.get("ok")), start=start, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"data": data.get("data"), "raw_evidence": data.get("raw_evidence", ""), **({"provider": "firecrawl"} if debug else {})}, debug=debug)
+
+
+def parse_firecrawl_location(raw: str | dict[str, Any] | None) -> dict[str, Any] | None:
+    if raw in (None, ""):
+        return None
+    try:
+        value = json.loads(raw) if isinstance(raw, str) else raw
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"--location must be valid JSON: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError("--location must be a JSON object")
+    unknown = set(value) - {"country", "languages"}
+    if unknown:
+        raise ValueError(f"--location contains unsupported fields: {', '.join(sorted(unknown))}")
+    country = value.get("country")
+    if country is not None and (not isinstance(country, str) or not re.fullmatch(r"[A-Z]{2}", country)):
+        raise ValueError("--location country must be an uppercase ISO alpha-2 code")
+    languages = value.get("languages")
+    if languages is not None and (not isinstance(languages, list) or not all(isinstance(item, str) and item for item in languages)):
+        raise ValueError("--location languages must be an array of strings")
+    return value
+
+
+def validate_firecrawl_map_limit(limit: int) -> int:
+    if not 1 <= limit <= 100000:
+        raise ValueError("--limit must be between 1 and 100000")
+    return limit
 
 
 async def map_site_operation(url: str, **kwargs: Any) -> dict[str, Any]:
     start = time.time()
     debug = bool(kwargs.pop("debug", False))
-    candidates, _ = operation_candidates("map.site")
-    if not candidates:
-        return _operation_envelope("map", "site", ok=False, start=start, error_type="config_error", error="No configured provider supports map.site", extra={"entries": []})
+    if not config.firecrawl_api_key:
+        return _operation_envelope("map", "site", ok=False, start=start, error_type="config_error", error="map.site requires FIRECRAWL_API_KEY; run `smart-search diagnose map site`", extra={"entries": []})
     try:
-        data = await _await_operation(
-            map_site(url, **kwargs),
-            start=start,
-            timeout=operation_policy("map.site")["timeout"],
-        )
-    except (asyncio.TimeoutError, httpx.TimeoutException, TimeoutError):
-        data = {"ok": False, "error_type": "timeout", "error": "map.site timed out"}
+        limit = validate_firecrawl_map_limit(int(kwargs.pop("limit", 5000)))
+        timeout_seconds = float(kwargs.pop("timeout", 150))
+        if timeout_seconds <= 0:
+            raise ValueError("--timeout must be positive")
+        location = parse_firecrawl_location(kwargs.pop("location", None))
+    except (TypeError, ValueError) as exc:
+        return _operation_envelope("map", "site", ok=False, start=start, error_type="parameter_error", error=str(exc), extra={"entries": []})
+    options = {
+        "search": kwargs.pop("search", ""),
+        "sitemap": kwargs.pop("sitemap", "include"),
+        "includeSubdomains": kwargs.pop("include_subdomains", True),
+        "ignoreQueryParameters": kwargs.pop("ignore_query_parameters", True),
+        "ignoreCache": kwargs.pop("ignore_cache", False),
+        "limit": limit,
+        "timeout_ms": int(timeout_seconds * 1000),
+    }
+    if location is not None:
+        options["location"] = location
+    if not options["search"]:
+        options.pop("search")
+    provider = FirecrawlProvider(config.firecrawl_api_url, config.firecrawl_api_key, config.firecrawl_timeout)
+    try:
+        data = await _await_operation(provider.map_site(url, **options), start=start, timeout=min(operation_policy("map.site")["timeout"], timeout_seconds + 10))
+    except Exception as exc:
+        error_type, error = _operation_exception(exc)
+        data = {"ok": False, "error_type": error_type, "error": error, "results": []}
     entries = data.get("results") or []
-    return _operation_envelope("map", "site", ok=bool(data.get("ok")), start=start, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"entries": entries, "results": entries}, debug=debug)
+    return _operation_envelope("map", "site", ok=bool(data.get("ok")), start=start, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"entries": entries, "results": entries, **({"provider": "firecrawl"} if debug else {})}, debug=debug)
 
 
 async def diagnose_operation(capability: str, operation: str = "") -> dict[str, Any]:

@@ -81,6 +81,15 @@ class SmartSearchArgumentParser(argparse.ArgumentParser):
         kwargs.setdefault("allow_abbrev", False)
         super().__init__(*args, **kwargs)
 
+    def error(self, message: str) -> None:
+        if any(flag in message for flag in ("--instructions", "--max-depth", "--max-breadth")):
+            message += "; Tavily Map parameters were removed, use Firecrawl --search/--sitemap/subdomain options"
+        elif "--mode" in message:
+            message += "; Exa search strategy is configured with EXA_SEARCH_TYPE"
+        elif "--ref" in message:
+            message += "; ZRead does not support repository refs"
+        super().error(message)
+
 
 TAVILY_DEFAULT_API_URL = "https://api.tavily.com"
 FIRECRAWL_DEFAULT_API_URL = "https://api.firecrawl.dev/v2"
@@ -2316,17 +2325,24 @@ async def _run_async(args: argparse.Namespace) -> int:
         if args.operation == "content":
             data = await service.fetch_content(args.url, debug=args.debug)
         else:
-            schema = json.loads(args.schema) if args.schema else None
-            data = await service.fetch_extract(args.url, max_length=args.max_length, schema=schema, debug=args.debug)
+            try:
+                schema = json.loads(args.schema) if args.schema else None
+            except json.JSONDecodeError as exc:
+                data = {"ok": False, "capability": "fetch", "operation": "extract", "content": "", "sources": [], "elapsed_ms": 0, "data": None, "error_type": "parameter_error", "error": f"--schema must be valid JSON: {exc}"}
+            else:
+                data = await service.fetch_extract(args.url, max_length=args.max_length, schema=schema, debug=args.debug)
         return _print_result("fetch", data, args.format, args.output)
     if args.command == "map":
         data = await service.map_site_operation(
             args.url,
-            instructions=args.instructions,
-            max_depth=args.max_depth,
-            max_breadth=args.max_breadth,
+            search=args.search,
+            sitemap=args.sitemap,
+            include_subdomains=args.include_subdomains,
+            ignore_query_parameters=args.ignore_query_parameters,
+            ignore_cache=args.ignore_cache,
             limit=args.limit,
             timeout=args.timeout,
+            location=args.location,
             debug=args.debug,
         )
         return _print_result("map", data, args.format, args.output)
@@ -2671,11 +2687,14 @@ def build_parser() -> argparse.ArgumentParser:
     map_site = map_sub.add_parser("site")
     map_site.set_defaults(operation="site")
     map_site.add_argument("url")
-    map_site.add_argument("--instructions", default="")
-    map_site.add_argument("--max-depth", type=int, default=1)
-    map_site.add_argument("--max-breadth", type=int, default=20)
-    map_site.add_argument("--limit", type=int, default=50)
+    map_site.add_argument("--search", default="")
+    map_site.add_argument("--sitemap", choices=["include", "skip", "only"], default="include")
+    map_site.add_argument("--include-subdomains", action=argparse.BooleanOptionalAction, default=True)
+    map_site.add_argument("--ignore-query-parameters", action=argparse.BooleanOptionalAction, default=True)
+    map_site.add_argument("--ignore-cache", action="store_true")
+    map_site.add_argument("--limit", type=int, default=5000)
     map_site.add_argument("--timeout", type=int, default=150)
+    map_site.add_argument("--location", default="", help='JSON object, for example {"country":"US","languages":["en-US"]}.')
     map_site.add_argument("--debug", action="store_true")
     _add_format_args(map_site)
 

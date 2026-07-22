@@ -32,13 +32,13 @@
 
 ## 4. Firecrawl 承接 Fetch 与 Map
 
-- [ ] 4.1 将 Firecrawl 请求封装收敛为可测试 adapter，统一认证、timeout、重试、错误映射和响应脱敏
-- [ ] 4.2 实现 `fetch content` 的 Firecrawl Scrape Markdown/正文请求与最终 URL/来源规范化
-- [ ] 4.3 完成 `fetch extract` 的 Firecrawl JSON Schema 请求，验证 `--schema` 并使 `--max-length` 只限制 `raw_evidence`
-- [ ] 4.4 实现 Firecrawl Map 请求与 `--search`、`--sitemap`、subdomain/query 双向布尔开关、cache、`1..100000` limit、秒转毫秒 timeout、country/languages location 映射
-- [ ] 4.5 从 `map site` parser 删除 `--instructions`、`--max-depth`、`--max-breadth` 并添加明确迁移错误/帮助测试
-- [ ] 4.6 验证 fetch/map 的公共 envelope、Markdown/content renderer 与输出文件行为保持稳定
-- [ ] 4.7 运行 Firecrawl adapter 和 fetch/map 聚焦测试，检查 diff 后提交 Firecrawl 阶段 commit
+- [x] 4.1 将 Firecrawl 请求封装收敛为可测试 adapter，统一认证、timeout、重试、错误映射和响应脱敏
+- [x] 4.2 实现 `fetch content` 的 Firecrawl Scrape Markdown/正文请求与最终 URL/来源规范化
+- [x] 4.3 完成 `fetch extract` 的 Firecrawl JSON Schema 请求，验证 `--schema` 并使 `--max-length` 只限制 `raw_evidence`
+- [x] 4.4 实现 Firecrawl Map 请求与 `--search`、`--sitemap`、subdomain/query 双向布尔开关、cache、`1..100000` limit、秒转毫秒 timeout、country/languages location 映射
+- [x] 4.5 从 `map site` parser 删除 `--instructions`、`--max-depth`、`--max-breadth` 并添加明确迁移错误/帮助测试
+- [x] 4.6 验证 fetch/map 的公共 envelope、Markdown/content renderer 与输出文件行为保持稳定
+- [x] 4.7 运行 Firecrawl adapter 和 fetch/map 聚焦测试，检查 diff 后提交 Firecrawl 阶段 commit
 
 ## 5. 删除非最小 Provider 与旧兼容层
 
