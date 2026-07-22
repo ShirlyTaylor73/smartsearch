@@ -1,3 +1,3 @@
 # Operation Routing
 
-Provider ordering, supported features, timeouts, credentials, and fallback are configured internally per operation. Fallback never crosses operation boundaries: tree is not search, structured extract is not readable content, and site map is not repository structure.
+The fixed matrix is: answer → Grok, sources → Exa, library docs → Context7, repository docs/tree/read → ZRead, and fetch/extract/map → Firecrawl. No operation builds a provider candidate list or falls back to another provider.

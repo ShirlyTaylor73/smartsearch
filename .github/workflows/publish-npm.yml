@@ -10,7 +10,7 @@ on:
         description: "Commit SHA, branch, or tag to publish from"
         required: true
       version:
-        description: "Exact npm version to publish, for example 0.2.0-beta.1"
+        description: "Exact npm version to publish, for example 0.3.0-beta.1"
         required: true
       npm_tag:
         description: "npm dist-tag to publish with"
@@ -151,4 +151,3 @@ jobs:
           else
             gh release create "$tag_name" --target "$target" --title "$tag_name" --notes "$notes" "${create_release_args[@]}"
           fi
-

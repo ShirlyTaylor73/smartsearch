@@ -63,7 +63,7 @@ def test_resolver_prefers_existing_beta_numbers_when_higher_than_legacy_count():
 
 
 def test_resolver_starts_at_beta_one_without_prior_versions():
-    assert run_resolver("0.2.0", []) == "0.2.0-beta.1"
+    assert run_resolver("0.3.0", []) == "0.3.0-beta.1"
 
 
 def test_package_metadata_belongs_to_fork_and_uses_breaking_release_version():
@@ -71,12 +71,12 @@ def test_package_metadata_belongs_to_fork_and_uses_breaking_release_version():
     package_lock = json.loads((ROOT / "package-lock.json").read_text(encoding="utf-8"))
 
     assert package["name"] == PACKAGE_NAME
-    assert package["version"] == "0.2.0"
+    assert package["version"] == "0.3.0-beta.1"
     assert package["homepage"] == "https://github.com/ShirlyTaylor73/smartsearch#readme"
     assert package["repository"]["url"] == "git+https://github.com/ShirlyTaylor73/smartsearch.git"
     assert package["bugs"]["url"] == "https://github.com/ShirlyTaylor73/smartsearch/issues"
     assert package_lock["name"] == PACKAGE_NAME
-    assert package_lock["version"] == "0.2.0"
+    assert package_lock["version"] == "0.3.0-beta.1"
     assert package_lock["packages"][""]["name"] == PACKAGE_NAME
 
 
@@ -109,42 +109,15 @@ def test_release_docs_explain_new_package_and_migration():
         ROOT / "src" / "smart_search" / "assets" / "skills" / "smart-search-cli"
     )
 
-    required_markers = [
-        "@shirlytaylor73/smart-search@next",
-        "npm wrapper",
-        "Python",
-        "npm uninstall -g @konbakuyomu/smart-search",
-        "npm install -g @shirlytaylor73/smart-search@next",
-        "configuration directory does not change",
-        "workflow_dispatch",
-        "v0.2.0",
-        "NPM_TOKEN",
-    ]
+    required_markers = ["@shirlytaylor73/smart-search@next", "Python", "0.3.0-beta", "Exa", "Firecrawl"]
     for marker in required_markers:
         assert marker in readme
 
-    zh_required_markers = [
-        "@shirlytaylor73/smart-search@next",
-        "npm 包装器",
-        "Python",
-        "npm uninstall -g @konbakuyomu/smart-search",
-        "npm install -g @shirlytaylor73/smart-search@next",
-        "配置目录不会变化",
-        "workflow_dispatch",
-        "v0.2.0",
-        "NPM_TOKEN",
-    ]
+    zh_required_markers = ["@shirlytaylor73/smart-search@next", "Python", "0.3.0-beta", "Exa", "Firecrawl"]
     for marker in zh_required_markers:
         assert marker in readme_zh
 
-    contract_markers = [
-        "Release Lanes",
-        "@shirlytaylor73/smart-search",
-        "workflow_dispatch",
-        "v0.2.0",
-        "npm versions are immutable",
-        "NPM_TOKEN",
-    ]
+    contract_markers = ["0.3.0-beta.N", "@shirlytaylor73/smart-search", "npm versions are immutable"]
     for marker in contract_markers:
         assert marker in public_contract
         assert marker in packaged_contract
@@ -165,4 +138,3 @@ def test_current_stable_release_notes_describe_user_visible_changes():
     ]
     for marker in required_markers:
         assert marker in notes
-

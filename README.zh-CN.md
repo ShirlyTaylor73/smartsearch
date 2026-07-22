@@ -1,180 +1,97 @@
 # Smart Search
 
-`smart-search` 是面向 AI Agent 和命令行用户的 CLI-first 网络与技术文档检索工具。Agent 只选择任务 operation；provider、凭据、优先级、feature 匹配、超时和 fallback 由配置与内部服务层管理。
+`smart-search` 是面向 AI Agent 的确定性检索 CLI。Agent 只选择任务命令；每个 operation 的 provider 固定，凭据和 endpoint 由维护者配置，不存在跨 provider fallback。
 
-## 安装与初始化
-
-`smart-search` 的实际实现是 Python CLI。npm 包只是 npm 包装器：它会创建
-隔离的 Python runtime，并安装随 npm 包发布的 Python 源码。
-
-0.2.0 预览阶段从 npm `next` 安装当前 fork：
+## 安装
 
 ```bash
 npm install -g @shirlytaylor73/smart-search@next
-smart-search setup
-smart-search doctor --format json
-```
-
-`v0.2.0` 发布后，稳定版使用
-`@shirlytaylor73/smart-search@latest`。
-
-也可以直接从源码安装 Python 包：
-
-```bash
-uv tool install --editable .
-# 或
-pip install -e .
 smart-search --version
-```
-
-## 四大查询能力
-
-### search：网络回答与来源发现
-
-```bash
-smart-search search answer "今天有哪些 AI 政策更新" --format json
-smart-search search sources "agentic search papers" --limit 5 --mode semantic --include-highlights --format json
-smart-search search similar https://example.com/article --limit 5 --format json
-```
-
-`search sources` 支持 provider 无关的 `--limit`、`--mode semantic|keyword|auto`、`--start-published-date`、`--include-domains`、`--exclude-domains`、`--category`、`--include-text`、`--include-highlights`。不支持必需 feature 的 provider 会被自动排除。
-
-### docs：技术文档与代码仓库
-
-```bash
-smart-search docs resolve react hooks --format json
-smart-search docs search "useEffect cleanup" --format json
-smart-search docs search "最近的重要 PR" --source owner/repo --format json
-smart-search docs tree owner/repo --path src --ref main --format json
-smart-search docs read owner/repo README.md --ref main --format content
-```
-
-### fetch：已知 URL 内容
-
-```bash
-smart-search fetch content https://example.com/article --format content
-smart-search fetch extract https://example.com/product --schema '{"type":"object"}' --format json
-```
-
-- `fetch content` 返回适合阅读、总结和引用的正文或 Markdown。
-- `fetch extract` 返回结构化 `data` 和可选 `raw_evidence`，不会用普通 Markdown 冒充结构化结果。
-
-### map：站点结构探索
-
-```bash
-smart-search map site https://docs.example.com \
-  --instructions "查找认证和限流页面" \
-  --max-depth 1 \
-  --max-breadth 20 \
-  --limit 50 \
-  --timeout 150 \
-  --format json
-```
-
-`map site` 发现站内 URL、路径和链接结构。它不是单页内容提取，也不是代码仓库目录读取；后两者分别使用 `fetch content` 和 `docs tree`。
-
-## Operation 与 Provider
-
-| Operation | 内部候选 |
-|---|---|
-| `search.answer` | xAI Responses、OpenAI-compatible |
-| `search.sources` | Exa、智谱 Web Search、智谱 MCP、Tavily、Firecrawl |
-| `search.similar` | Exa |
-| `docs.resolve` | Context7 |
-| `docs.search` | Context7、Exa、智谱 MCP zread |
-| `docs.tree` | 智谱 MCP zread |
-| `docs.read` | 智谱 MCP zread |
-| `fetch.content` | Tavily、Jina、智谱 MCP Reader、Firecrawl |
-| `fetch.extract` | Firecrawl 结构化抽取 |
-| `map.site` | Tavily |
-
-Fallback 只在同一个 operation 内发生。例如 `docs.tree` 不会 fallback 到 Context7，`fetch.extract` 不会 fallback 到普通正文。
-
-可用 `SMART_SEARCH_OPERATION_CONFIG` 配置 operation 顺序、禁用项、超时和 fallback，值为 JSON object；普通 Agent 无需读取或修改它。
-
-## 配置与排查
-
-```bash
 smart-search setup
+```
+
+Python 源码位于 `src/smart_search/`；npm 包只是跨平台启动包装器，安装时创建 Python 环境并调用 `python -m smart_search.cli`。
+
+## 命令与唯一 Provider
+
+| 命令 | 唯一 Provider / Tool |
+|---|---|
+| `search answer QUERY` | Grok；由 `SMART_SEARCH_GROK_TRANSPORT` 选择 xAI Responses 或 OpenAI-compatible |
+| `search sources QUERY` | Exa Search `/search` |
+| `docs resolve NAME [QUERY]` | Context7 library search |
+| 普通 `docs search QUERY` | Context7 context lookup |
+| `docs search QUERY --source owner/repo` | Zhipu MCP ZRead `search_doc` |
+| `docs tree REPO [--path PATH]` | ZRead `get_repo_structure` |
+| `docs read REPO PATH` | ZRead `read_file` |
+| `fetch content URL` | Firecrawl Scrape Markdown |
+| `fetch extract URL` | Firecrawl Scrape JSON |
+| `map site URL` | Firecrawl Map |
+
+```bash
+smart-search search answer "今天 AI Agent 有什么重要新闻？" --format markdown
+smart-search search sources "agent context retrieval" --limit 5 --include-highlights
+smart-search docs resolve nextjs "app router"
+smart-search docs search "最近的重要 PR" --source owner/repo
+smart-search docs tree owner/repo --path src
+smart-search docs read owner/repo README.md --format content
+smart-search fetch content https://example.com/article --format content
+smart-search fetch extract https://example.com/product --schema '{"type":"object","properties":{"name":{"type":"string"}}}'
+smart-search map site https://docs.example.com --search authentication --sitemap include --limit 50
+```
+
+`map site` 默认使用 `sitemap=include`、包含子域名、忽略 query 参数、不忽略缓存、`limit=5000`。`--timeout` 单位为秒，内部转换为 Firecrawl 的毫秒；`--location` 接受 `{"country":"US","languages":["en-US"]}`。
+
+## 配置
+
+主要配置键：
+
+| Provider | 配置 |
+|---|---|
+| Grok | `SMART_SEARCH_GROK_TRANSPORT=xai-responses|openai-compatible`，以及所选 transport 的 URL/key/model |
+| Exa | `EXA_API_KEY`、`EXA_BASE_URL`、`EXA_TIMEOUT_SECONDS`、`EXA_SEARCH_TYPE` |
+| Context7 | `CONTEXT7_API_KEY`、`CONTEXT7_BASE_URL`、`CONTEXT7_TIMEOUT_SECONDS` |
+| ZRead | `ZHIPU_MCP_API_KEY`、`ZHIPU_MCP_ZREAD_API_URL`、`ZHIPU_MCP_TIMEOUT_SECONDS` |
+| Firecrawl | `FIRECRAWL_API_KEY`、`FIRECRAWL_API_URL`、`FIRECRAWL_TIMEOUT_SECONDS` |
+
+`EXA_SEARCH_TYPE` 允许 `instant|fast|auto|deep-lite|deep|deep-reasoning`，默认 `auto`。`SMART_SEARCH_OPERATION_TIMEOUTS` 只允许配置已知 operation 的总超时，例如：
+
+```json
+{"search.answer":120,"map.site":180}
+```
+
+配置优先级为环境变量高于配置文件。查看位置和脱敏配置：
+
+```bash
 smart-search config path
 smart-search config list
-smart-search config set KEY VALUE
-smart-search config unset KEY
-smart-search doctor --format markdown
-
+smart-search doctor
 smart-search diagnose search sources
-smart-search diagnose docs tree
-smart-search diagnose fetch extract
-smart-search diagnose map site
-smart-search diagnose provider openai-compatible
-smart-search diagnose route "React API docs"
-smart-search diagnose route-calibrate
-smart-search diagnose smoke --mode mock
+smart-search diagnose provider firecrawl
 ```
 
-主要凭据包括 `XAI_API_KEY`、`OPENAI_COMPATIBLE_API_URL`、`OPENAI_COMPATIBLE_API_KEY`、`EXA_API_KEY`、`CONTEXT7_API_KEY`、`ZHIPU_API_KEY`、`ZHIPU_MCP_API_KEY`、`JINA_API_KEY`、`TAVILY_API_KEY`、`FIRECRAWL_API_KEY`。`config list` 默认脱敏。
+唯一 provider 缺失或失败时立即返回 `config_error`、`parameter_error`、`auth_error`、`rate_limited`、`timeout`、`network_error`、`parse_error` 或 `provider_error`，不会尝试其他 provider。
 
-## 输出与退出码
+## 0.3.0-beta 迁移
 
-所有查询 operation 支持：
+| 旧契约 | 新契约 |
+|---|---|
+| 多 provider 顺序、feature negotiation、fallback | 删除；每个 operation 固定 executor |
+| `search similar` / `exa-similar` | 删除；Exa `findSimilar` 已 deprecated，无语义等价转发 |
+| `search sources --mode` | 删除；维护者用 `EXA_SEARCH_TYPE` |
+| `docs tree/read --ref` | 删除；ZRead 当前 schema 不支持 ref |
+| Tavily `map --instructions/--max-depth/--max-breadth` | 使用 Firecrawl `--search`、`--sitemap`、subdomain/query/cache/location 参数 |
+| Tavily、Jina、Zhipu REST、Zhipu MCP Search/Reader、DeepWiki | 删除 |
+| `SMART_SEARCH_FALLBACK_MODE`、`SMART_SEARCH_OPERATION_CONFIG`、`OPENAI_COMPATIBLE_FALLBACK_MODELS` | 删除；旧配置键读取时忽略，可用 `config unset` 手动清理旧文件 |
 
-```bash
---format json|markdown|content
---output PATH
---debug
-```
+功能性命令仍包括 `setup`、`doctor`、`config path|list|set|unset`、`skills status|update`、完整 `diagnose`、`dev regression`、`-h/--help` 和 `-v/--version`。
 
-公共 JSON 包含 `ok`、`capability`、`operation`、`content`、`sources`、`elapsed_ms`。退出码：`0` 成功、`2` 参数错误、`3` 配置错误、`4` 网络/能力错误、`5` 运行时错误。
-
-## 迁移
-
-### npm 包归属
-
-当前仓库发布 `@shirlytaylor73/smart-search`。上游
-`@konbakuyomu/smart-search` 是另一个独立 npm 包，不会收到当前 fork 的
-更新。两个包都会安装同名 `smart-search` 命令，因此必须先卸载旧包：
+## 验证
 
 ```bash
-npm uninstall -g @konbakuyomu/smart-search
-npm install -g @shirlytaylor73/smart-search@next
-smart-search -v
-smart-search diagnose smoke --mode mock
-```
-
-配置目录不会变化，现有 API key 和 `SMART_SEARCH_OPERATION_CONFIG` 无需迁移。
-
-### CLI 契约
-
-旧 provider 命令在兼容期内隐藏并映射到新 operation，例如 `exa-search` → `search sources`、`exa-similar` → `search similar`、`context7-library` → `docs resolve`、旧 `fetch` → `fetch content`、旧 `map` → `map site`。
-
-实验性垂直 provider 与 Deep Research CLI 已移除。研究分解、证据对比和最终写作由上层 Agent 负责；论文与垂直检索后续通过独立 paper-search 扩展。
-
-## 开发验证
-
-```bash
-smart-search dev regression
 python -m compileall -q src tests
 python -m pytest tests -q
 npm test
+smart-search diagnose smoke --mode mock
 ```
 
-## 发布通道
-
-beta 通过 `workflow_dispatch` 手动发布，需要指定 `target_ref`、类似
-`0.2.0-beta.1` 的准确版本和 npm `next`。稳定版通过类似 `v0.2.0`
-的 Git tag 发布到 npm `latest`。GitHub Actions 使用仓库 Secret
-`NPM_TOKEN` 完成 npm 认证，并保留 provenance。
-
-npm 版本不可变，已发布版本不能原地改名，只能用新的 beta 版本替代。
-
-发布收尾检查：
-
-1. 先运行 `npm view @shirlytaylor73/smart-search` 并通过
-   `gh release list --repo ShirlyTaylor73/smartsearch --limit 100` 核对现状。
-2. 遇到 npm `E409` 时，先确认版本是否已经存在，再串行重试。
-3. 兼容窗口内可运行旧入口 `smart-search regression` 和
-   `smart-search smoke --mock --format json` 验证迁移提示；新版入口分别是
-   `smart-search dev regression` 和
-   `smart-search diagnose smoke --mode mock --format json`。
-4. Windows 包装层额外执行非 ASCII JSON 管道，并用
-   PowerShell `ConvertFrom-Json` 验证输出。
+发布版本线为 `0.3.0-beta.N`，npm dist-tag 使用 `next`。

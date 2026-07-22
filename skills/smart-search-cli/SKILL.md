@@ -1,41 +1,32 @@
 ---
 name: smart-search-cli
-description: "CLI-first web and documentation retrieval through four provider-independent capability namespaces."
+description: "Deterministic CLI-first web, documentation, URL extraction, and site mapping for AI agents."
 ---
 
 # Smart Search CLI
 
-Use the local `smart-search` command. Choose an operation by task intent; never choose or manage providers.
+Use the local `smart-search` command. Select operations by task intent; never select, reorder, or retry providers.
 
 ## Query operations
 
-- `smart-search search answer QUERY --format json`: generate a web-backed answer.
-- `smart-search search sources QUERY --limit 5 --format json`: retrieve source-first web results.
-- `smart-search search similar URL --limit 5 --format json`: find similar pages.
-- `smart-search docs resolve NAME [QUERY] --format json`: resolve a library/documentation source.
-- `smart-search docs search QUERY [--source SOURCE] --format json`: search technical docs or repository knowledge.
-- `smart-search docs tree REPO [--path PATH] [--ref REF] --format json`: inspect repository structure.
-- `smart-search docs read REPO PATH [--ref REF] --format content`: read a repository file.
-- `smart-search fetch content URL --format content`: retrieve readable page/PDF content.
-- `smart-search fetch extract URL --format json`: retrieve structured data or raw evidence.
-- `smart-search map site URL --limit 50 --format json`: discover URLs and link structure within a site.
+- `smart-search search answer QUERY --format json`: current-web answer.
+- `smart-search search sources QUERY --limit 5 --format json`: source discovery.
+- `smart-search docs resolve NAME [QUERY] --format json`: resolve a Context7 library id.
+- `smart-search docs search QUERY [--source SOURCE] --format json`: search library docs or `owner/repo` knowledge.
+- `smart-search docs tree REPO [--path PATH] --format json`: inspect repository structure.
+- `smart-search docs read REPO PATH --format content`: read a repository file.
+- `smart-search fetch content URL --format content`: retrieve readable content.
+- `smart-search fetch extract URL [--schema JSON] --format json`: extract structured data.
+- `smart-search map site URL [--search TEXT] --limit 50 --format json`: discover site URLs.
 
 ## Selection rules
 
-- Use `search answer` for a direct current-web answer.
-- Use `search sources` when the agent needs candidate URLs or filtering.
-- Use `docs` for libraries, APIs, SDKs, repositories, directory trees, and files.
-- Use `fetch content` after a URL is known and readable evidence is required.
-- Use `fetch extract` only when structured fields/evidence are required.
-- Use `map site` only for site URL discovery; it is not page extraction or repository structure.
+- Use `search answer` for a synthesized answer and `search sources` for URLs/results.
+- Use `docs` for libraries, SDKs, repositories, directory trees, and files.
+- Use `fetch content` after a URL is known; use `fetch extract` only for structured fields.
+- Use `map site` for URL discovery, not page extraction or repository structure.
+- Do not use removed provider commands, `search similar`, `--mode`, repository `--ref`, or Tavily Map flags.
 
-Provider selection, credentials, ordering, feature matching, timeout, and fallback are configuration concerns and MUST NOT be managed by the agent.
+Provider responsibility, credentials, Exa type, transport selection, and timeouts are maintainer configuration. A provider failure is final for that operation; the agent must not emulate fallback.
 
-## Output and errors
-
-- Default to `--format json` for results and `--format content` for long readable bodies.
-- Treat `config_error` as a maintainer configuration issue.
-- Treat `capability_error` as an unsupported operation/feature combination; do not retry with provider-specific commands.
-- Use `doctor` or `diagnose` only when the user explicitly asks for troubleshooting.
-
-The calling agent owns research orchestration; future paper/vertical retrieval is handled separately.
+Default to JSON for structured results and content format for long bodies. Treat `config_error` as a maintainer issue and use `doctor`/`diagnose` only when troubleshooting is requested.

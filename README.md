@@ -1,188 +1,89 @@
 # Smart Search
 
-`smart-search` is a CLI-first web and technical-document retrieval tool for AI agents and terminal users. Agents choose task operations; provider selection, credentials, feature matching, timeouts, and fallback remain configuration concerns.
+`smart-search` is a deterministic retrieval CLI for AI agents. Agents choose task operations; every operation has one responsible provider, while credentials and endpoints remain maintainer configuration. There is no cross-provider fallback.
 
-## Install and setup
-
-`smart-search` is implemented in Python. The npm package is an npm wrapper
-that creates an isolated Python runtime and installs the bundled Python CLI.
-
-During the 0.2.0 preview, install the fork-owned package from npm dist-tag
-`next`:
+## Install
 
 ```bash
 npm install -g @shirlytaylor73/smart-search@next
-smart-search setup
-smart-search doctor --format json
-```
-
-After `v0.2.0` is published, stable installations can use
-`@shirlytaylor73/smart-search@latest`.
-
-Python source installation:
-
-```bash
-uv tool install --editable .
-# or
-pip install -e .
 smart-search --version
-```
-
-## Four query capabilities
-
-### search
-
-```bash
-smart-search search answer "latest AI policy updates" --format json
-smart-search search sources "agentic search papers" --limit 5 --mode semantic --include-highlights --format json
-smart-search search similar https://example.com/article --limit 5 --format json
-```
-
-`search sources` supports provider-independent limit, semantic/keyword/auto mode, publication date, include/exclude domains, category, text, and highlights. Providers that do not support required features are excluded automatically.
-
-### docs
-
-```bash
-smart-search docs resolve react hooks --format json
-smart-search docs search "useEffect cleanup" --format json
-smart-search docs search "recent important PRs" --source owner/repo --format json
-smart-search docs tree owner/repo --path src --ref main --format json
-smart-search docs read owner/repo README.md --ref main --format content
-```
-
-### fetch
-
-```bash
-smart-search fetch content https://example.com/article --format content
-smart-search fetch extract https://example.com/product --schema '{"type":"object"}' --format json
-```
-
-- `fetch content` returns readable text or Markdown.
-- `fetch extract` returns structured `data` and optional `raw_evidence`; it never substitutes ordinary Markdown for structured output.
-
-### map
-
-```bash
-smart-search map site https://docs.example.com \
-  --instructions "find authentication and rate-limit pages" \
-  --max-depth 1 \
-  --max-breadth 20 \
-  --limit 50 \
-  --timeout 150 \
-  --format json
-```
-
-`map site` discovers URLs, paths, and link structure within a site. It is not page extraction or repository structure; use `fetch content` and `docs tree` for those tasks.
-
-## Operation/provider mapping
-
-| Operation | Internal candidates |
-|---|---|
-| `search.answer` | xAI Responses, OpenAI-compatible |
-| `search.sources` | Exa, Zhipu Web Search, Zhipu MCP, Tavily, Firecrawl |
-| `search.similar` | Exa |
-| `docs.resolve` | Context7 |
-| `docs.search` | Context7, Exa, Zhipu MCP zread |
-| `docs.tree` | Zhipu MCP zread |
-| `docs.read` | Zhipu MCP zread |
-| `fetch.content` | Tavily, Jina, Zhipu MCP Reader, Firecrawl |
-| `fetch.extract` | Firecrawl structured extraction |
-| `map.site` | Tavily |
-
-Fallback stays within the same operation. `docs.tree` never falls back to Context7, and `fetch.extract` never falls back to readable Markdown.
-
-Maintainers can configure per-operation ordering, disabled providers, timeout, and fallback through the JSON object in `SMART_SEARCH_OPERATION_CONFIG`. Agents do not manage this setting.
-
-## Configuration and diagnostics
-
-```bash
 smart-search setup
+```
+
+The CLI source is Python under `src/smart_search/`. The npm package is a cross-platform launcher that creates the Python environment and runs `python -m smart_search.cli`.
+
+## Commands and Responsible Providers
+
+| Command | Provider / Tool |
+|---|---|
+| `search answer QUERY` | Grok via the configured xAI Responses or OpenAI-compatible transport |
+| `search sources QUERY` | Exa Search `/search` |
+| `docs resolve NAME [QUERY]` | Context7 library search |
+| plain `docs search QUERY` | Context7 context lookup |
+| `docs search QUERY --source owner/repo` | Zhipu MCP ZRead `search_doc` |
+| `docs tree REPO [--path PATH]` | ZRead `get_repo_structure` |
+| `docs read REPO PATH` | ZRead `read_file` |
+| `fetch content URL` | Firecrawl Scrape Markdown |
+| `fetch extract URL` | Firecrawl Scrape JSON |
+| `map site URL` | Firecrawl Map |
+
+```bash
+smart-search search answer "important AI agent news today" --format markdown
+smart-search search sources "agent context retrieval" --limit 5 --include-highlights
+smart-search docs resolve nextjs "app router"
+smart-search docs search "recent important PRs" --source owner/repo
+smart-search docs tree owner/repo --path src
+smart-search docs read owner/repo README.md --format content
+smart-search fetch content https://example.com/article --format content
+smart-search fetch extract https://example.com/product --schema '{"type":"object","properties":{"name":{"type":"string"}}}'
+smart-search map site https://docs.example.com --search authentication --sitemap include --limit 50
+```
+
+Firecrawl Map defaults are `sitemap=include`, include subdomains, ignore query parameters, use cache, and `limit=5000`. CLI timeout values are seconds and are converted to milliseconds. `--location` accepts JSON such as `{"country":"US","languages":["en-US"]}`.
+
+## Configuration
+
+| Provider | Configuration |
+|---|---|
+| Grok | `SMART_SEARCH_GROK_TRANSPORT=xai-responses|openai-compatible` plus the selected transport URL/key/model |
+| Exa | `EXA_API_KEY`, `EXA_BASE_URL`, `EXA_TIMEOUT_SECONDS`, `EXA_SEARCH_TYPE` |
+| Context7 | `CONTEXT7_API_KEY`, `CONTEXT7_BASE_URL`, `CONTEXT7_TIMEOUT_SECONDS` |
+| ZRead | `ZHIPU_MCP_API_KEY`, `ZHIPU_MCP_ZREAD_API_URL`, `ZHIPU_MCP_TIMEOUT_SECONDS` |
+| Firecrawl | `FIRECRAWL_API_KEY`, `FIRECRAWL_API_URL`, `FIRECRAWL_TIMEOUT_SECONDS` |
+
+`EXA_SEARCH_TYPE` accepts `instant|fast|auto|deep-lite|deep|deep-reasoning` and defaults to `auto`. `SMART_SEARCH_OPERATION_TIMEOUTS` only overrides known operation budgets, for example `{"search.answer":120,"map.site":180}`.
+
+```bash
 smart-search config path
 smart-search config list
-smart-search config set KEY VALUE
-smart-search config unset KEY
-smart-search doctor --format markdown
-
+smart-search doctor
 smart-search diagnose search sources
-smart-search diagnose docs tree
-smart-search diagnose fetch extract
-smart-search diagnose map site
-smart-search diagnose provider openai-compatible
-smart-search diagnose route "React API docs"
-smart-search diagnose route-calibrate
-smart-search diagnose smoke --mode mock
+smart-search diagnose provider firecrawl
 ```
 
-Common credentials include `XAI_API_KEY`, `OPENAI_COMPATIBLE_API_URL`, `OPENAI_COMPATIBLE_API_KEY`, `EXA_API_KEY`, `CONTEXT7_API_KEY`, `ZHIPU_API_KEY`, `ZHIPU_MCP_API_KEY`, `JINA_API_KEY`, `TAVILY_API_KEY`, and `FIRECRAWL_API_KEY`. `config list` masks secrets.
+If the responsible provider is missing or fails, the operation stops with a stable error category. It never calls a different provider.
 
-## Output and exit codes
+## 0.3.0-beta Migration
 
-Query operations support:
+| Removed contract | Replacement |
+|---|---|
+| provider ordering, feature negotiation, fallback | fixed operation executor |
+| `search similar` / `exa-similar` | removed; deprecated Exa Find Similar has no equivalent redirect |
+| `search sources --mode` | configure `EXA_SEARCH_TYPE` |
+| `docs tree/read --ref` | removed because ZRead does not support ref |
+| Tavily Map depth/instruction flags | Firecrawl search, sitemap, subdomain, query, cache, and location flags |
+| Tavily, Jina, Zhipu REST, Zhipu MCP Search/Reader, DeepWiki | removed |
+| fallback/operation-chain config keys | removed and ignored when found in old config files |
 
-```bash
---format json|markdown|content
---output PATH
---debug
-```
+Maintenance commands remain: `setup`, `doctor`, `config`, `skills`, `diagnose`, `dev regression`, help, and version.
 
-The public JSON envelope contains `ok`, `capability`, `operation`, `content`, `sources`, and `elapsed_ms`. Exit codes: `0` success, `2` parameter error, `3` configuration error, `4` network/capability error, and `5` runtime error.
-
-## Migration
-
-### npm package ownership
-
-This repository publishes `@shirlytaylor73/smart-search`. The upstream
-`@konbakuyomu/smart-search` package is a separate package and does not
-receive updates from this fork. Both packages expose the same
-`smart-search` executable, so uninstall the upstream package first:
+## Verify
 
 ```bash
-npm uninstall -g @konbakuyomu/smart-search
-npm install -g @shirlytaylor73/smart-search@next
-smart-search -v
-smart-search diagnose smoke --mode mock
-```
-
-The configuration directory does not change, so existing credentials and
-`SMART_SEARCH_OPERATION_CONFIG` values remain available.
-
-### CLI contract
-
-Legacy provider commands are hidden during the compatibility window and map to operations, for example `exa-search` → `search sources`, `exa-similar` → `search similar`, `context7-library` → `docs resolve`, legacy `fetch` → `fetch content`, and legacy `map` → `map site`.
-
-The experimental vertical provider and Deep Research CLI were removed. The calling agent owns research decomposition, evidence comparison, and final writing; paper and vertical retrieval will be extended separately through paper-search.
-
-## Development
-
-```bash
-smart-search dev regression
 python -m compileall -q src tests
 python -m pytest tests -q
 npm test
+smart-search diagnose smoke --mode mock
 ```
 
-## Release lanes
-
-Beta releases are started manually through `workflow_dispatch` with an
-explicit `target_ref`, version such as `0.2.0-beta.1`, and npm dist-tag
-`next`. Stable releases use a matching tag such as `v0.2.0` and publish
-to npm dist-tag `latest`. GitHub Actions reads the repository secret
-`NPM_TOKEN` and publishes with provenance.
-
-npm versions are immutable and cannot be renamed in place. Failed beta builds
-must be superseded by a new `0.2.0-beta.N` version.
-
-Release closeout checklist:
-
-1. Compare npm versions/dist-tags and GitHub releases before publishing.
-2. If Actions cannot create a prerelease, publish with
-   `create_github_release=false`, then run
-   `gh release create vX.Y.Z-beta.N --target <commit> --prerelease --latest=false`.
-3. Treat npm `E409` during parallel backfills as a registry concurrency
-   failure and retry serially after checking whether the version exists.
-4. Run a machine-readable gap check between expected npm beta versions and
-   GitHub prereleases.
-5. Install the selected build with
-   `mise use -g "npm:@shirlytaylor73/smart-search@0.2.0-beta.1" -y --pin`,
-   then verify version, regression, smoke, and a non-ASCII JSON pipe through
-   PowerShell `ConvertFrom-Json`.
+Breaking prereleases use the `0.3.0-beta.N` line and npm dist-tag `next`.

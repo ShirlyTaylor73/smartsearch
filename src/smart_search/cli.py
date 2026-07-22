@@ -26,16 +26,17 @@ class SmartSearchArgumentParser(argparse.ArgumentParser):
 
 
 def _get_version() -> str:
+    pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    try:
+        for line in pyproject.read_text(encoding="utf-8").splitlines():
+            if line.startswith("version = "):
+                return line.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
     try:
         return metadata.version("smart-search")
     except metadata.PackageNotFoundError:
-        pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
-        try:
-            for line in pyproject.read_text(encoding="utf-8").splitlines():
-                if line.startswith("version = "):
-                    return line.split("=", 1)[1].strip().strip('"')
-        except OSError:
-            pass
+        pass
     return "unknown"
 
 

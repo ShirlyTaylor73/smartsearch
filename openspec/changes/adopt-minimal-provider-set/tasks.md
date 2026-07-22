@@ -62,13 +62,13 @@
 
 ## 7. 文档、Skill 与 Breaking Release
 
-- [ ] 7.1 更新 `README.zh-CN.md`，加入完整“能力/子命令 → 唯一 provider/tool”表、凭据表和失败策略
-- [ ] 7.2 更新 `README.md`，与中文 README 的命令、参数、配置和迁移内容保持一致
-- [ ] 7.3 编写从多 provider/fallback、旧 provider 命令、`search similar`、`search sources --mode`、ZRead `--ref`、Tavily Map 参数迁移到新版契约的对照表
-- [ ] 7.4 同步更新 `skills/smart-search-cli/` 与 `src/smart_search/assets/skills/smart-search-cli/`，确保 Agent 不管理 provider
-- [ ] 7.5 更新 npm wrapper、Python/package metadata 和发布测试到 `0.3.0-beta.x` 版本线
-- [ ] 7.6 检查 README、skill、CLI help、OpenSpec 规格和实际 parser 没有相互矛盾
-- [ ] 7.7 检查 diff 后提交文档与发布契约阶段 commit
+- [x] 7.1 更新 `README.zh-CN.md`，加入完整“能力/子命令 → 唯一 provider/tool”表、凭据表和失败策略
+- [x] 7.2 更新 `README.md`，与中文 README 的命令、参数、配置和迁移内容保持一致
+- [x] 7.3 编写从多 provider/fallback、旧 provider 命令、`search similar`、`search sources --mode`、ZRead `--ref`、Tavily Map 参数迁移到新版契约的对照表
+- [x] 7.4 同步更新 `skills/smart-search-cli/` 与 `src/smart_search/assets/skills/smart-search-cli/`，确保 Agent 不管理 provider
+- [x] 7.5 更新 npm wrapper、Python/package metadata 和发布测试到 `0.3.0-beta.x` 版本线
+- [x] 7.6 检查 README、skill、CLI help、OpenSpec 规格和实际 parser 没有相互矛盾
+- [x] 7.7 检查 diff 后提交文档与发布契约阶段 commit
 
 ## 8. 完整验证与交付
 
