@@ -72,10 +72,13 @@
 
 ## 8. 完整验证与交付
 
-- [ ] 8.1 运行 `python -m compileall -q src tests`
-- [ ] 8.2 运行全部 `python -m pytest tests -q`
-- [ ] 8.3 运行 `npm test` 和发布资源/安装包装器相关测试
-- [ ] 8.4 运行 mock smoke、CLI regression 与所有 help/version 示例
-- [ ] 8.5 在凭据可用时分别实际测试 Grok、Exa Search、Context7、ZRead、Firecrawl；如未运行必须明确记录原因，不得伪装通过
-- [ ] 8.6 重新检查 proposal、design、两份 spec 与全部任务完成情况，并运行 OpenSpec validate
-- [ ] 8.7 运行 `git diff --check`、检查敏感信息和最终 `git status`，提交验证/收尾 commit
+- [x] 8.1 运行 `python -m compileall -q src tests`
+- [x] 8.2 运行全部 `python -m pytest tests -q`
+- [x] 8.3 运行 `npm test` 和发布资源/安装包装器相关测试
+- [x] 8.4 运行 mock smoke、CLI regression 与所有 help/version 示例
+- [x] 8.5 在凭据可用时分别实际测试 Grok、Exa Search、Context7、ZRead、Firecrawl；如未运行必须明确记录原因，不得伪装通过
+  - Grok `search answer` 与 Context7 `docs resolve` 真实请求成功。
+  - ZRead `search_doc`、`get_repo_structure`、`read_file` 已分别对两个公开仓库发起真实请求，均由上游返回 `MCP error -500`，因此不记为成功。
+  - Exa 与 Firecrawl 未配置凭据，未执行真实请求；mock、payload 与错误路径由自动化测试覆盖。
+- [x] 8.6 重新检查 proposal、design、两份 spec 与全部任务完成情况，并运行 OpenSpec validate
+- [x] 8.7 运行 `git diff --check`、检查敏感信息和最终 `git status`，提交验证/收尾 commit

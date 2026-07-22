@@ -3,186 +3,26 @@ import pytest
 from smart_search import service
 
 
-def test_minimum_profile_reports_missing_categories(monkeypatch):
-    monkeypatch.setenv("SMART_SEARCH_MINIMUM_PROFILE", "standard")
-
-    result = service.validate_minimum_profile()
-
-    assert result["ok"] is False
-    assert set(result["missing"]) == {"main_search", "docs_search", "web_fetch"}
-    assert "capability_status" in result
-
-
-@pytest.mark.asyncio
-async def test_mock_smoke_passes():
-    result = await service.smoke("mock")
-
-    assert result["ok"] is True
-    assert result["failed_cases"] == []
-    assert any(case["name"] == "operation profile docs.search" for case in result["cases"])
-    assert any(case["name"] == "same-operation fallback contract" for case in result["cases"])
-
-
 @pytest.mark.asyncio
 async def test_mock_smoke_covers_public_operation_matrix():
     result = await service.smoke("mock")
+    assert result["ok"] is True
     case_names = {case["name"] for case in result["cases"]}
-
-    expected = {f"operation profile {operation}" for operation in service.OPERATION_PROFILES}
-    assert expected <= case_names
-    assert len(expected) == 10
-    assert "public operation provider matrix" in case_names
-    assert "same-operation fallback contract" in case_names
+    assert {f"operation profile {operation}" for operation in service.OPERATION_PROFILES} <= case_names
+    assert "no cross-provider fallback" in case_names
 
 
 @pytest.mark.asyncio
-async def test_mock_smoke_does_not_depend_on_local_keys(monkeypatch):
-    for key in service.config._CONFIG_KEYS:
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("SMART_SEARCH_MINIMUM_PROFILE", "standard")
-
-    result = await service.smoke("mock")
-
-    assert result["ok"] is True
-    assert result["failed_cases"] == []
-    assert all(case["ok"] for case in result["cases"])
-
-
-@pytest.mark.asyncio
-async def test_live_smoke_treats_provider_failure_as_degraded_when_fallback_exists(monkeypatch):
-    monkeypatch.setenv("ZHIPU_API_KEY", "zhipu-secret")
-    monkeypatch.setenv("TAVILY_API_KEY", "tavily-secret")
-
-    async def fake_doctor():
-        return {
-            "ok": True,
-            "minimum_profile_ok": True,
-            "error_type": "",
-            "error": "",
-            "capability_status": {
-                "main_search": {"configured": ["xai-responses"], "fallback_chain": ["xai-responses", "openai-compatible"], "ok": True},
-                "web_search": {"configured": ["zhipu", "tavily"], "fallback_chain": ["zhipu", "tavily", "firecrawl"], "ok": True},
-                "docs_search": {"configured": ["context7"], "fallback_chain": ["context7", "exa"], "ok": True},
-                "web_fetch": {"configured": ["tavily"], "fallback_chain": ["tavily", "firecrawl"], "ok": True},
-            },
-            "zhipu_connection_test": {"status": "warning", "message": "HTTP 429: Too Many Requests"},
-            "context7_connection_test": {"status": "not_configured", "message": "CONTEXT7_API_KEY 未设置"},
-        }
-
-    async def fake_fetch(url):
-        return {"ok": True, "url": url, "provider": "tavily", "content": "# Page", "provider_attempts": []}
-
-    monkeypatch.setattr(service, "doctor", fake_doctor)
-    monkeypatch.setattr(service, "fetch", fake_fetch)
-
+async def test_live_smoke_reports_missing_fixed_executors(monkeypatch):
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
     result = await service.smoke("live")
-
-    assert result["ok"] is True
-    assert result["failed_cases"] == []
-    assert result["degraded_cases"] == ["zhipu search"]
-
-
-@pytest.mark.asyncio
-async def test_fetch_attempts_show_fallback(monkeypatch):
-    monkeypatch.setenv("TAVILY_API_KEY", "tavily-secret")
-    monkeypatch.setenv("FIRECRAWL_API_KEY", "firecrawl-secret")
-
-    async def no_tavily(url):
-        return None
-
-    async def yes_firecrawl(url, ctx=None):
-        return "# Page"
-
-    monkeypatch.setattr(service, "call_tavily_extract", no_tavily)
-    monkeypatch.setattr(service, "call_firecrawl_scrape", yes_firecrawl)
-
-    result = await service.fetch("https://example.com")
-
-    assert result["ok"] is True
-    assert result["provider"] == "firecrawl"
-    assert result["fallback_used"] is True
-    assert [a["provider"] for a in result["provider_attempts"]] == ["tavily", "firecrawl"]
+    assert result["mode"] == "live"
+    sources = next(case for case in result["cases"] if case["name"] == "search.sources")
+    assert sources["ok"] is False
+    assert sources["responsible_provider"] == "exa"
 
 
 @pytest.mark.asyncio
-async def test_search_docs_intent_uses_docs_fallback(monkeypatch):
-    monkeypatch.setenv("OPENAI_COMPATIBLE_API_URL", "https://api.example.com/v1")
-    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "sk-test-secret")
-    monkeypatch.setenv("EXA_API_KEY", "exa-secret")
-    monkeypatch.setenv("CONTEXT7_API_KEY", "ctx-secret")
-    monkeypatch.setenv("TAVILY_API_KEY", "tavily-secret")
-
-    async def fake_search(self, query, platform="", ctx=None):
-        return "Answer."
-
-    async def fake_context7(name, query=""):
-        return {"ok": True, "results": [{"id": "/facebook/react", "title": "React", "description": "UI"}], "total": 1}
-
-    monkeypatch.setattr(service.OpenAICompatibleSearchProvider, "search", fake_search)
-    monkeypatch.setattr(service, "context7_library", fake_context7)
-
-    result = await service.search("React useEffect API docs", validation="balanced")
-
-    assert result["ok"] is True
-    assert result["routing_decision"]["docs_intent"] is True
-    assert result["fallback_used"] is False
-    assert "context7" in result["providers_used"]
-    assert "exa" not in result["providers_used"]
-
-
-@pytest.mark.asyncio
-async def test_search_docs_intent_falls_back_to_exa_after_context7_empty(monkeypatch):
-    monkeypatch.setenv("OPENAI_COMPATIBLE_API_URL", "https://api.example.com/v1")
-    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "sk-test-secret")
-    monkeypatch.setenv("EXA_API_KEY", "exa-secret")
-    monkeypatch.setenv("CONTEXT7_API_KEY", "ctx-secret")
-    monkeypatch.setenv("TAVILY_API_KEY", "tavily-secret")
-
-    async def fake_search(self, query, platform="", ctx=None):
-        return "Answer."
-
-    async def fake_context7(name, query=""):
-        return {"ok": True, "results": [], "total": 0}
-
-    async def fake_exa(*args, **kwargs):
-        return {"ok": True, "results": [{"url": "https://docs.example.com", "title": "Docs"}]}
-
-    monkeypatch.setattr(service.OpenAICompatibleSearchProvider, "search", fake_search)
-    monkeypatch.setattr(service, "context7_library", fake_context7)
-    monkeypatch.setattr(service, "exa_search", fake_exa)
-
-    result = await service.search("React useEffect API docs", validation="balanced")
-
-    assert result["ok"] is True
-    assert result["fallback_used"] is True
-    providers = [attempt["provider"] for attempt in result["provider_attempts"] if attempt["capability"] == "docs_search"]
-    assert providers == ["context7", "exa"]
-    assert "exa" in result["providers_used"]
-
-
-@pytest.mark.asyncio
-async def test_search_zh_current_uses_zhipu_reinforcement(monkeypatch):
-    monkeypatch.setenv("OPENAI_COMPATIBLE_API_URL", "https://api.example.com/v1")
-    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "sk-test-secret")
-    monkeypatch.setenv("EXA_API_KEY", "exa-secret")
-    monkeypatch.setenv("TAVILY_API_KEY", "tavily-secret")
-    monkeypatch.setenv("ZHIPU_API_KEY", "zhipu-secret")
-
-    async def fake_search(self, query, platform="", ctx=None):
-        return "Answer."
-
-    async def fake_zhipu(query, count=10, **kwargs):
-        return {
-            "ok": True,
-            "results": [{"url": "https://example.com/news", "title": "News", "provider": "zhipu"}],
-            "total": 1,
-        }
-
-    monkeypatch.setattr(service.OpenAICompatibleSearchProvider, "search", fake_search)
-    monkeypatch.setattr(service, "zhipu_search", fake_zhipu)
-
-    result = await service.search("今天国内 AI 新闻", validation="balanced")
-
-    assert result["ok"] is True
-    assert result["routing_decision"]["zh_current_intent"] is True
-    assert "zhipu" in result["providers_used"]
+async def test_invalid_smoke_mode_is_parameter_error():
+    result = await service.smoke("bogus")
+    assert result["error_type"] == "parameter_error"

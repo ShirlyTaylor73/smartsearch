@@ -114,22 +114,22 @@ def test_env_dir_also_governs_log_dir_parent(monkeypatch, tmp_path):
     assert not (target / "logs").exists()
 
 
-def test_tavily_timeout_defaults_to_thirty_seconds(monkeypatch):
-    monkeypatch.delenv("TAVILY_TIMEOUT_SECONDS", raising=False)
+def test_firecrawl_timeout_defaults_to_thirty_seconds(monkeypatch):
+    monkeypatch.delenv("FIRECRAWL_TIMEOUT_SECONDS", raising=False)
     config = _fresh_config_file(monkeypatch)
-    assert config.tavily_timeout == 30.0
+    assert config.firecrawl_timeout == 30.0
     info = config.get_config_info()
-    assert info["TAVILY_TIMEOUT_SECONDS"] == 30.0
-    assert info["config_sources"]["TAVILY_TIMEOUT_SECONDS"] == "default"
+    assert info["FIRECRAWL_TIMEOUT_SECONDS"] == 30.0
+    assert info["config_sources"]["FIRECRAWL_TIMEOUT_SECONDS"] == "default"
 
 
-def test_tavily_timeout_can_be_configured(monkeypatch):
-    monkeypatch.setenv("TAVILY_TIMEOUT_SECONDS", "45")
+def test_firecrawl_timeout_can_be_configured(monkeypatch):
+    monkeypatch.setenv("FIRECRAWL_TIMEOUT_SECONDS", "45")
     config = _fresh_config_file(monkeypatch)
-    assert config.tavily_timeout == 45.0
+    assert config.firecrawl_timeout == 45.0
     info = config.get_config_info()
-    assert info["TAVILY_TIMEOUT_SECONDS"] == 45.0
-    assert info["config_sources"]["TAVILY_TIMEOUT_SECONDS"] == "environment"
+    assert info["FIRECRAWL_TIMEOUT_SECONDS"] == 45.0
+    assert info["config_sources"]["FIRECRAWL_TIMEOUT_SECONDS"] == "environment"
 
 
 def test_absolute_log_dir_is_resolved_without_creation(monkeypatch, tmp_path):

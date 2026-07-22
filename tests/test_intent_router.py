@@ -45,39 +45,6 @@ async def test_route_keeps_zh_current_field_narrow_for_english_current_queries(m
 
 
 @pytest.mark.asyncio
-async def test_search_routing_decision_keeps_old_fields_and_adds_new_router_fields(monkeypatch):
-    monkeypatch.setenv("OPENAI_COMPATIBLE_API_URL", "https://relay.example.com/v1")
-    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "relay-test-secret")
-    monkeypatch.setenv("EXA_API_KEY", "exa-test-secret")
-    monkeypatch.setenv("TAVILY_API_KEY", "tavily-test-secret")
-
-    async def fake_search(self, query, platform="", ctx=None):
-        return "Docs answer."
-
-    async def fake_docs_search(query, providers="auto", fallback="auto"):
-        return [{"url": "context7:/facebook/react", "provider": "context7"}], [
-            {"capability": "docs_search", "provider": "context7", "status": "ok", "elapsed_ms": 1, "result_count": 1}
-        ]
-
-    monkeypatch.setattr(service.OpenAICompatibleSearchProvider, "search", fake_search)
-    monkeypatch.setattr(service, "_run_docs_search_fallback", fake_docs_search)
-
-    result = await service.search("React useEffect API docs", validation="balanced")
-    routing = result["routing_decision"]
-
-    assert result["ok"] is True
-    assert routing["docs_intent"] is True
-    assert routing["zh_current_intent"] is False
-    assert routing["web_current_intent"] is False
-    assert routing["fetch_intent"] is False
-    assert routing["supplemental_paths"] == ["docs_search"]
-    assert routing["required_capabilities"] == ["docs_search"]
-    assert routing["intent_router_mode"] == "hybrid"
-    assert "rules" in routing["router_engines_used"]
-    assert routing["degraded"] is True
-
-
-@pytest.mark.asyncio
 async def test_classifier_ignores_unknown_capabilities_and_provider_names(monkeypatch):
     monkeypatch.setenv("SMART_SEARCH_INTENT_ROUTER", "hybrid")
     monkeypatch.setenv("INTENT_CLASSIFIER_API_URL", "https://classifier.example.com/chat/completions")
