@@ -12,21 +12,32 @@ smart-search --version
 smart-search setup
 ```
 
-使用本包自己的 `npx` 命令一次性安装或更新 Agent skill；仅安装 skill 时不需要预先全局安装 CLI：
+交互式 `smart-search setup` 在保存 provider 配置后会询问是否安装 bundled Agent skill。也可使用本包自己的 `npx` 命令单独安装，无需预先全局安装 CLI：
 
 ```bash
 npx --yes --package=@shirlytaylor73/smart-search@next \
-  smart-search skills update --targets codex
+  smart-search skills install --project --agent codex --yes
 ```
 
-默认安装到用户主目录下对应 Agent 的 skill 目录。安装到当前项目，或同时安装到多个 Agent：
+项目级安装将实体文件保存到 `<project>/.agents/skills/smart-search-cli/`，其他 Agent 目录默认通过链接指向该目录。多 Agent 安装：
 
 ```bash
 npx --yes --package=@shirlytaylor73/smart-search@next \
-  smart-search skills update --targets codex,claude,cursor --project-root "$PWD"
+  smart-search skills install --project \
+  --agent codex --agent claude --agent cursor --yes
 ```
 
-全局安装 CLI 后，可运行 `smart-search skills status --targets codex`，比较已安装 skill 与包内版本是否一致。
+全局安装使用 `--global`，canonical 目录为 `~/.agents/skills/smart-search-cli/`。Windows 优先使用 directory junction；链接不可用时自动降级为复制，也可用 `--copy` 显式选择复制。
+
+当前 target：`codex`、`claude`、`cursor`、`opencode`、`copilot`、`gemini`、`kiro`、`qoder`、`codebuddy`、`droid`、`pi`、`kilo`、`antigravity`、`windsurf`、`hermes`。
+
+独立管理命令：
+
+```bash
+smart-search skills status --project --agent codex --yes
+smart-search skills update --project --agent codex --yes
+smart-search skills uninstall --project --agent codex --yes
+```
 
 Python 源码位于 `src/smart_search/`；npm 包只是跨平台启动包装器，安装时创建 Python 环境并调用 `python -m smart_search.cli`。
 
@@ -101,7 +112,7 @@ smart-search diagnose provider firecrawl
 | Tavily、Jina、Zhipu REST、Zhipu MCP Search/Reader、DeepWiki | 删除 |
 | `SMART_SEARCH_FALLBACK_MODE`、`SMART_SEARCH_OPERATION_CONFIG`、`OPENAI_COMPATIBLE_FALLBACK_MODELS` | 删除；旧配置键读取时忽略，可用 `config unset` 手动清理旧文件 |
 
-功能性命令仍包括 `setup`、`doctor`、`config path|list|set|unset`、`skills status|update`、完整 `diagnose`、`dev regression`、`-h/--help` 和 `-v/--version`。
+功能性命令仍包括 `setup`、`doctor`、`config path|list|set|unset`、`skills install|uninstall|status|update`、完整 `diagnose`、`dev regression`、`-h/--help` 和 `-v/--version`。
 
 ## 验证
 

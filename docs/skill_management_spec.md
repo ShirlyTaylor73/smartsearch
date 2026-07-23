@@ -4,6 +4,8 @@
 
 Smart Search CLI 统一通过 `smart-search skills` 管理随包发布的 Agent skill，并在交互式 `smart-search setup` 完成 provider 配置后提供 skill 安装步骤。当前只包含 `smart-search-cli`，命令和数据结构需允许未来增加多个 bundled skill。
 
+实现基线于 2026-07-23 核对的 [vercel-labs/skills](https://github.com/vercel-labs/skills) README、[`installer.ts`](https://github.com/vercel-labs/skills/blob/main/src/installer.ts) 和 [`remove.ts`](https://github.com/vercel-labs/skills/blob/main/src/remove.ts)。
+
 ## 命令契约
 
 ```text

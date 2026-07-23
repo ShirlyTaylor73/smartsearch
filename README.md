@@ -12,21 +12,32 @@ smart-search --version
 smart-search setup
 ```
 
-Install or update the bundled Agent skill with this package's own `npx` command. This one-time skill installation does not require a global CLI installation:
+Interactive `smart-search setup` offers to install the bundled Agent skill after provider configuration. You can also install it independently with this package's own `npx` command, without a prior global CLI installation:
 
 ```bash
 npx --yes --package=@shirlytaylor73/smart-search@next \
-  smart-search skills update --targets codex
+  smart-search skills install --project --agent codex --yes
 ```
 
-The default destination is the selected Agent's skill directory under the user home. To install into the current project, or to target multiple Agents:
+Project installs keep one canonical copy at `<project>/.agents/skills/smart-search-cli/`. Other Agent directories link to that copy by default. To target multiple Agents:
 
 ```bash
 npx --yes --package=@shirlytaylor73/smart-search@next \
-  smart-search skills update --targets codex,claude,cursor --project-root "$PWD"
+  smart-search skills install --project \
+  --agent codex --agent claude --agent cursor --yes
 ```
 
-Use `smart-search skills status --targets codex` after global CLI installation to compare an installed skill with the bundled version.
+Global installs use `--global` and keep the canonical copy at `~/.agents/skills/smart-search-cli/`. Windows prefers directory junctions. If directory links are unavailable, installation falls back to copies; pass `--copy` to select copying explicitly.
+
+Current targets: `codex`, `claude`, `cursor`, `opencode`, `copilot`, `gemini`, `kiro`, `qoder`, `codebuddy`, `droid`, `pi`, `kilo`, `antigravity`, `windsurf`, and `hermes`.
+
+Manage an existing installation independently:
+
+```bash
+smart-search skills status --project --agent codex --yes
+smart-search skills update --project --agent codex --yes
+smart-search skills uninstall --project --agent codex --yes
+```
 
 The CLI source is Python under `src/smart_search/`. The npm package is a cross-platform launcher that creates the Python environment and runs `python -m smart_search.cli`.
 
@@ -93,7 +104,7 @@ If the responsible provider is missing or fails, the operation stops with a stab
 | Tavily, Jina, Zhipu REST, Zhipu MCP Search/Reader, DeepWiki | removed |
 | fallback/operation-chain config keys | removed and ignored when found in old config files |
 
-Maintenance commands remain: `setup`, `doctor`, `config`, `skills`, `diagnose`, `dev regression`, help, and version.
+Maintenance commands remain: `setup`, `doctor`, `config`, `skills install|uninstall|status|update`, `diagnose`, `dev regression`, help, and version.
 
 ## Verify
 
