@@ -7,7 +7,7 @@
 日常执行搜索命令时，全局安装 CLI：
 
 ```bash
-npm install -g @shirlytaylor73/smart-search@next
+npm install -g @shirlytaylor73/smart-search@latest
 smart-search --version
 smart-search setup
 ```
@@ -15,14 +15,14 @@ smart-search setup
 交互式 `smart-search setup` 在保存 provider 配置后会询问是否安装 bundled Agent skill。也可使用本包自己的 `npx` 命令单独安装，无需预先全局安装 CLI：
 
 ```bash
-npx --yes --package=@shirlytaylor73/smart-search@next \
+npx --yes --package=@shirlytaylor73/smart-search@latest \
   smart-search skills install --project --agent codex --yes
 ```
 
 项目级安装将实体文件保存到 `<project>/.agents/skills/smart-search-cli/`，其他 Agent 目录默认通过链接指向该目录。多 Agent 安装：
 
 ```bash
-npx --yes --package=@shirlytaylor73/smart-search@next \
+npx --yes --package=@shirlytaylor73/smart-search@latest \
   smart-search skills install --project \
   --agent codex --agent claude --agent cursor --yes
 ```
@@ -100,7 +100,7 @@ smart-search diagnose provider firecrawl
 
 唯一 provider 缺失或失败时立即返回 `config_error`、`parameter_error`、`auth_error`、`rate_limited`、`timeout`、`network_error`、`parse_error` 或 `provider_error`，不会尝试其他 provider。
 
-## 0.3.0-beta 迁移
+## 0.3.0 迁移
 
 | 旧契约 | 新契约 |
 |---|---|
@@ -123,4 +123,4 @@ npm test
 smart-search diagnose smoke --mode mock
 ```
 
-发布版本线为 `0.3.0-beta.N`，npm dist-tag 使用 `next`。
+当前稳定版为 `0.3.0`，npm dist-tag 使用 `latest`。

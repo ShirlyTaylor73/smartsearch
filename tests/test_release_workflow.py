@@ -58,17 +58,17 @@ def test_resolver_starts_at_beta_one_without_prior_versions():
     assert run_resolver("0.3.0", []) == "0.3.0-beta.1"
 
 
-def test_package_metadata_belongs_to_fork_and_uses_breaking_release_version():
+def test_package_metadata_belongs_to_fork_and_uses_stable_release_version():
     package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
     package_lock = json.loads((ROOT / "package-lock.json").read_text(encoding="utf-8"))
 
     assert package["name"] == PACKAGE_NAME
-    assert package["version"] == "0.3.0-beta.2"
+    assert package["version"] == "0.3.0"
     assert package["homepage"] == "https://github.com/ShirlyTaylor73/smartsearch#readme"
     assert package["repository"]["url"] == "git+https://github.com/ShirlyTaylor73/smartsearch.git"
     assert package["bugs"]["url"] == "https://github.com/ShirlyTaylor73/smartsearch/issues"
     assert package_lock["name"] == PACKAGE_NAME
-    assert package_lock["version"] == "0.3.0-beta.2"
+    assert package_lock["version"] == "0.3.0"
     assert package_lock["packages"][""]["name"] == PACKAGE_NAME
 
 
@@ -100,16 +100,16 @@ def test_release_docs_explain_new_package_and_migration():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     readme_zh = (ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
 
-    required_markers = ["@shirlytaylor73/smart-search@next", "Python", "0.3.0-beta", "Exa", "Firecrawl"]
+    required_markers = ["@shirlytaylor73/smart-search@latest", "Python", "0.3.0", "Exa", "Firecrawl"]
     for marker in required_markers:
         assert marker in readme
 
-    zh_required_markers = ["@shirlytaylor73/smart-search@next", "Python", "0.3.0-beta", "Exa", "Firecrawl"]
+    zh_required_markers = ["@shirlytaylor73/smart-search@latest", "Python", "0.3.0", "Exa", "Firecrawl"]
     for marker in zh_required_markers:
         assert marker in readme_zh
 
     npx_markers = [
-        "npx --yes --package=@shirlytaylor73/smart-search@next",
+        "npx --yes --package=@shirlytaylor73/smart-search@latest",
         "smart-search skills install --project --agent codex --yes",
     ]
     for marker in npx_markers:

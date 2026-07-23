@@ -7,7 +7,7 @@
 Install the CLI globally for regular search commands:
 
 ```bash
-npm install -g @shirlytaylor73/smart-search@next
+npm install -g @shirlytaylor73/smart-search@latest
 smart-search --version
 smart-search setup
 ```
@@ -15,14 +15,14 @@ smart-search setup
 Interactive `smart-search setup` offers to install the bundled Agent skill after provider configuration. You can also install it independently with this package's own `npx` command, without a prior global CLI installation:
 
 ```bash
-npx --yes --package=@shirlytaylor73/smart-search@next \
+npx --yes --package=@shirlytaylor73/smart-search@latest \
   smart-search skills install --project --agent codex --yes
 ```
 
 Project installs keep one canonical copy at `<project>/.agents/skills/smart-search-cli/`. Other Agent directories link to that copy by default. To target multiple Agents:
 
 ```bash
-npx --yes --package=@shirlytaylor73/smart-search@next \
+npx --yes --package=@shirlytaylor73/smart-search@latest \
   smart-search skills install --project \
   --agent codex --agent claude --agent cursor --yes
 ```
@@ -92,7 +92,7 @@ smart-search diagnose provider firecrawl
 
 If the responsible provider is missing or fails, the operation stops with a stable error category. It never calls a different provider.
 
-## 0.3.0-beta Migration
+## 0.3.0 Migration
 
 | Removed contract | Replacement |
 |---|---|
@@ -115,4 +115,4 @@ npm test
 smart-search diagnose smoke --mode mock
 ```
 
-Breaking prereleases use the `0.3.0-beta.N` line and npm dist-tag `next`.
+The current stable release is `0.3.0` and uses the npm dist-tag `latest`.

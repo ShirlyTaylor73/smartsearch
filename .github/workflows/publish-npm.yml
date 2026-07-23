@@ -10,7 +10,7 @@ on:
         description: "Commit SHA, branch, or tag to publish from"
         required: true
       version:
-        description: "Exact npm version to publish, for example 0.3.0-beta.1"
+        description: "Exact npm version to publish, for example 0.3.0"
         required: true
       npm_tag:
         description: "npm dist-tag to publish with"
