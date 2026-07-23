@@ -131,6 +131,15 @@ def test_npx_skill_installation_is_part_of_package_validation():
     assert '"codex"' in npx_test
 
 
+def test_bundled_skill_has_one_repository_source():
+    package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+
+    assert (ROOT / "src/smart_search/assets/skills/smart-search-cli/SKILL.md").is_file()
+    assert not (ROOT / "skills/smart-search-cli").exists()
+    assert "src/smart_search/assets/skills/smart-search-cli/**" in package["files"]
+    assert "skills/smart-search-cli/**" not in package["files"]
+
+
 def test_current_stable_release_notes_describe_user_visible_changes():
     notes = (ROOT / ".github" / "releases" / "v0.2.0.md").read_text(encoding="utf-8")
 

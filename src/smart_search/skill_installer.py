@@ -198,13 +198,9 @@ def _filesystem_skill_root(skill_name: str) -> Path | None:
     package_root = os.getenv(PACKAGE_ROOT_ENV, "").strip()
     if package_root:
         base = Path(package_root)
-        candidates.extend(
-            [base / "src" / "smart_search" / "assets" / "skills" / skill_name, base / "skills" / skill_name]
-        )
+        candidates.append(base / "src" / "smart_search" / "assets" / "skills" / skill_name)
     repo_root = Path(__file__).resolve().parents[2]
-    candidates.extend(
-        [repo_root / "src" / "smart_search" / "assets" / "skills" / skill_name, repo_root / "skills" / skill_name]
-    )
+    candidates.append(repo_root / "src" / "smart_search" / "assets" / "skills" / skill_name)
     return next((candidate for candidate in candidates if candidate.is_dir()), None)
 
 

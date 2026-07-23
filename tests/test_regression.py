@@ -2,20 +2,16 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PUBLIC_SKILL_DIR = ROOT / "skills" / "smart-search-cli"
-PACKAGED_SKILL_DIR = ROOT / "src" / "smart_search" / "assets" / "skills" / "smart-search-cli"
+SKILL_DIR = ROOT / "src" / "smart_search" / "assets" / "skills" / "smart-search-cli"
 
 
-def test_public_and_packaged_skill_files_match():
-    public = {path.relative_to(PUBLIC_SKILL_DIR) for path in PUBLIC_SKILL_DIR.rglob("*") if path.is_file()}
-    packaged = {path.relative_to(PACKAGED_SKILL_DIR) for path in PACKAGED_SKILL_DIR.rglob("*") if path.is_file()}
-    assert public == packaged
-    for relative in public:
-        assert (PUBLIC_SKILL_DIR / relative).read_bytes() == (PACKAGED_SKILL_DIR / relative).read_bytes()
+def test_agent_skill_uses_one_packaged_source_directory():
+    assert SKILL_DIR.is_dir()
+    assert not (ROOT / "skills" / "smart-search-cli").exists()
 
 
 def test_agent_skill_is_a_compact_navigation_entrypoint():
-    skill = PUBLIC_SKILL_DIR / "SKILL.md"
+    skill = SKILL_DIR / "SKILL.md"
     text = skill.read_text(encoding="utf-8")
     assert len(text.splitlines()) <= 60
     for marker in (
@@ -48,14 +44,14 @@ def test_agent_skill_references_document_the_current_cli_parameters():
         Path("references/map.md"),
     }
     actual_files = {
-        path.relative_to(PUBLIC_SKILL_DIR)
-        for path in PUBLIC_SKILL_DIR.rglob("*")
+        path.relative_to(SKILL_DIR)
+        for path in SKILL_DIR.rglob("*")
         if path.is_file()
     }
     assert actual_files == expected_files
 
     references = {
-        name: (PUBLIC_SKILL_DIR / "references" / name).read_text(encoding="utf-8")
+        name: (SKILL_DIR / "references" / name).read_text(encoding="utf-8")
         for name in ("common.md", "search.md", "docs.md", "fetch.md", "map.md")
     }
     for marker in ("--format", "--output", "--debug", "--help", "--version", "error_type", "error"):
@@ -93,7 +89,7 @@ def test_agent_skill_references_document_the_current_cli_parameters():
 def test_agent_skill_contains_only_current_agent_usage_guidance():
     text = "\n".join(
         path.read_text(encoding="utf-8")
-        for path in PUBLIC_SKILL_DIR.rglob("*")
+        for path in SKILL_DIR.rglob("*")
         if path.is_file()
     ).lower()
     for excluded in (

@@ -26,6 +26,15 @@ Use `smart-search` to retrieve current, source-backed information.
 - Discover and read web sources: `search sources` → `fetch content`.
 - Resolve and query stable library documentation: `docs resolve` → `docs search`.
 - Inspect and read repository code: `docs tree` → `docs read`.
+- Find reference implementations before coding, then inspect the selected repositories:
+
+  ```bash
+  smart-search search answer "Which open-source projects implement <feature>, and how?"
+  smart-search search sources "GitHub projects implementing <feature>" --include-domains github.com
+  smart-search docs search "How is <feature> implemented?" --source owner/repo
+  smart-search docs tree owner/repo --path src
+  smart-search docs read owner/repo src/path/to/relevant-file
+  ```
 
 ## Handle output and errors
 

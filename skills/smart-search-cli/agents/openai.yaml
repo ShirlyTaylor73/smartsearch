@@ -1,4 +1,0 @@
-interface:
-  display_name: "Smart Search CLI"
-  short_description: "Search web, docs, repositories, and URLs"
-  default_prompt: "Use $smart-search-cli to find and read the sources needed for this request."

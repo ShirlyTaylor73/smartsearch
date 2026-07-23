@@ -64,8 +64,7 @@
 ## 仓库结构
 
 - `src/smart_search/`：Python CLI、服务、配置、路由及 provider 实现。
-- `src/smart_search/assets/skills/`：随 Python 包发布的 skill 资源；改动时注意与仓库根目录对应资源保持一致。
-- `skills/smart-search-cli/`：仓库内可直接维护的 Smart Search skill。
+- `src/smart_search/assets/skills/`：随 Python 包和 npm 包发布的 skill 唯一源目录。
 - `tests/`：pytest 测试。
 - `npm/`：npm 包装器及其测试脚本。
 - `scripts/`：开发、验证和维护脚本。
@@ -139,4 +138,4 @@ OpenSpec、平台 skill、subagent 和其他辅助工具均为可选能力。仅
 - 不执行破坏性 Git 或文件操作，除非用户明确要求并确认影响。
 - 保持 Python `>=3.10` 兼容，并关注 Windows、macOS 和 Linux 的路径及终端差异。
 - CLI 的 JSON、Markdown 和 content 输出属于用户可见契约；修改字段、退出码、fallback 或流式行为时必须考虑向后兼容和回归测试。
-- 修改 `skills/smart-search-cli/` 时，同时检查 `src/smart_search/assets/skills/smart-search-cli/` 的发布副本，避免安装后的 skill 与仓库版本漂移。
+- 修改 Smart Search skill 时只维护 `src/smart_search/assets/skills/smart-search-cli/`，不得再建立仓库根目录副本。
