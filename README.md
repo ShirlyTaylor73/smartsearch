@@ -115,4 +115,4 @@ npm test
 smart-search diagnose smoke --mode mock
 ```
 
-The current stable release is `0.3.1` and uses the npm dist-tag `latest`.
+The current stable release is `0.3.2` and uses the npm dist-tag `latest`.

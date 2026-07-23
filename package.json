@@ -1,6 +1,6 @@
 {
   "name": "@shirlytaylor73/smart-search",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Deterministic CLI-first web and documentation retrieval for AI agents.",
   "license": "MIT",
   "homepage": "https://github.com/ShirlyTaylor73/smartsearch#readme",
