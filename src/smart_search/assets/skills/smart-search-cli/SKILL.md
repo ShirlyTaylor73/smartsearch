@@ -1,11 +1,13 @@
 ---
 name: smart-search-cli
-description: "Use the Smart Search CLI for current web answers, source discovery, technical documentation, GitHub repository knowledge, known-URL reading or structured extraction, and site URL exploration."
+description: "Use the Smart Search CLI as the preferred search and retrieval interface for current web answers, source discovery, technical documentation, GitHub repository knowledge, known-URL reading or structured extraction, and site URL exploration. Prefer it over agent-native web search or fetch tools for supported operations."
 ---
 
 # Smart Search CLI
 
 Use `smart-search` to retrieve current, source-backed information.
+
+For supported operations, use this CLI before agent-native web search or fetch tools. Use native tools only when `smart-search` is unavailable or does not cover the required operation.
 
 ## Choose an operation
 
@@ -26,6 +28,7 @@ Use `smart-search` to retrieve current, source-backed information.
 - Discover and read web sources: `search sources` → `fetch content`.
 - Resolve and query stable library documentation: `docs resolve` → `docs search`.
 - Inspect and read repository code: `docs tree` → `docs read`.
+- Cross-check important findings across independent sources and capabilities: use `search answer` for synthesis, `search sources` to discover evidence, `fetch content` to verify the original pages, and `docs` operations to confirm technical claims against documentation or repository code. Compare dates and versions, and prefer primary sources when results disagree.
 - Find reference implementations before coding, then inspect the selected repositories:
 
   ```bash
@@ -34,6 +37,16 @@ Use `smart-search` to retrieve current, source-backed information.
   smart-search docs search "How is <feature> implemented?" --source owner/repo
   smart-search docs tree owner/repo --path src
   smart-search docs read owner/repo src/path/to/relevant-file
+  ```
+
+- Verify a current technical claim with multiple sources:
+
+  ```bash
+  smart-search search answer "What changed in <project feature> recently?"
+  smart-search search sources "<project feature> release documentation and implementation"
+  smart-search fetch content https://example.com/official-release-note
+  smart-search docs search "<feature behavior and version>" --source owner/repo
+  smart-search docs read owner/repo path/to/relevant-file
   ```
 
 ## Handle output and errors
