@@ -37,16 +37,19 @@ try {
     `--package=${tarball}`,
     "smart-search",
     "skills",
-    "update",
-    "--targets",
+    "install",
+    "--project",
+    "--agent",
     "codex",
-    "--project-root",
-    projectRoot,
+    "--agent",
+    "claude",
+    "--yes",
     "--format",
     "json"
   ], { cwd: projectRoot });
 
-  const installedRoot = path.join(projectRoot, ".codex", "skills", "smart-search-cli");
+  const installedRoot = path.join(projectRoot, ".agents", "skills", "smart-search-cli");
+  const linkedRoot = path.join(projectRoot, ".claude", "skills", "smart-search-cli");
   const expectedFiles = [
     "SKILL.md",
     "agents/openai.yaml",
@@ -60,6 +63,18 @@ try {
     if (!fs.existsSync(path.join(installedRoot, relativePath))) {
       throw new Error(`npx skill installation did not create ${relativePath}`);
     }
+    if (!fs.existsSync(path.join(linkedRoot, relativePath))) {
+      throw new Error(`npx linked Agent installation did not expose ${relativePath}`);
+    }
+  }
+
+  const canonicalStat = fs.lstatSync(installedRoot);
+  if (canonicalStat.isSymbolicLink()) {
+    throw new Error("canonical npx skill installation must be a real directory");
+  }
+  const linkedStat = fs.lstatSync(linkedRoot);
+  if (process.platform !== "win32" && !linkedStat.isSymbolicLink()) {
+    throw new Error("secondary Agent installation should be a symlink on POSIX");
   }
 } finally {
   fs.rmSync(tempRoot, { recursive: true, force: true });

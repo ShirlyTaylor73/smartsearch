@@ -7,7 +7,20 @@ from pathlib import Path
 from typing import Any
 
 from . import service
-from .skill_installer import DEFAULT_SKILL_TARGET_IDS, SkillInstallError, install_skill_targets, parse_skill_targets, status_skill_targets
+from .skill_installer import (
+    SKILL_NAME,
+    SKILL_TARGETS,
+    SkillInstallError,
+    canonical_skill_path,
+    detect_skill_targets,
+    install_skill_targets,
+    parse_skill_names,
+    parse_skill_targets,
+    skill_target_path,
+    status_skill_targets,
+    uninstall_skill_targets,
+    update_skill_targets,
+)
 
 
 class SmartSearchArgumentParser(argparse.ArgumentParser):
@@ -43,6 +56,17 @@ def _get_version() -> str:
 def _add_output_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--format", choices=["json", "markdown", "content"], default="json")
     parser.add_argument("--output", default="")
+
+
+def _add_skill_selection_args(parser: argparse.ArgumentParser, *, include_copy: bool = False) -> None:
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument("-p", "--project", dest="project_scope", action="store_true")
+    scope.add_argument("-g", "--global", dest="global_scope", action="store_true")
+    parser.add_argument("-a", "--agent", dest="agents", action="append", default=[])
+    parser.add_argument("--all-agents", action="store_true")
+    parser.add_argument("-y", "--yes", action="store_true")
+    if include_copy:
+        parser.add_argument("--copy", action="store_true", help="Copy files instead of linking Agent directories.")
 
 
 def _markdown(data: dict[str, Any]) -> str:
@@ -175,6 +199,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     setup = sub.add_parser("setup", help="Configure the fixed provider set.")
     setup.add_argument("--non-interactive", action="store_true")
+    _add_skill_selection_args(setup, include_copy=True)
     setup.add_argument("--grok-transport", choices=["xai-responses", "openai-compatible"], default="")
     for flag in (
         "xai-api-url", "xai-api-key", "xai-model", "xai-tools",
@@ -226,13 +251,12 @@ def build_parser() -> argparse.ArgumentParser:
     config_unset.add_argument("key")
     _add_output_args(config_unset)
 
-    skills = sub.add_parser("skills", help="Inspect or update bundled Agent skills.")
+    skills = sub.add_parser("skills", help="Install, inspect, update, or uninstall bundled Agent skills.")
     skills_sub = skills.add_subparsers(dest="skills_command", required=True, parser_class=SmartSearchArgumentParser)
-    for name in ("status", "update"):
+    for name in ("install", "uninstall", "status", "update"):
         item = skills_sub.add_parser(name)
-        item.add_argument("--targets", default=",".join(DEFAULT_SKILL_TARGET_IDS))
-        item.add_argument("--project-root", default="")
-        item.add_argument("--source-root", default="")
+        item.add_argument("name", nargs="?", default=SKILL_NAME)
+        _add_skill_selection_args(item, include_copy=name == "install")
         _add_output_args(item)
 
     dev = sub.add_parser("dev", help="Developer commands.")
@@ -277,6 +301,143 @@ def _setup_values(args: argparse.Namespace) -> dict[str, str]:
     return {key: value for key, value in mapping.items() if value != ""}
 
 
+def _prompt(message: str) -> str:
+    try:
+        return input(message).strip()
+    except EOFError as exc:
+        raise SkillInstallError("Interactive skill selection requires a terminal; use --project/--global and --agent") from exc
+
+
+def _prompt_yes_no(message: str, *, default: bool = False) -> bool:
+    suffix = " [Y/n]: " if default else " [y/N]: "
+    value = _prompt(message + suffix).lower()
+    if not value:
+        return default
+    return value in {"y", "yes", "是", "好"}
+
+
+def _skill_scope(args: argparse.Namespace, *, non_interactive: bool = False) -> str:
+    if getattr(args, "global_scope", False):
+        return "global"
+    if getattr(args, "project_scope", False):
+        return "project"
+    if non_interactive or getattr(args, "yes", False):
+        return "project"
+    value = _prompt("Skill scope [project/global] (project): ").lower()
+    if value in {"", "project", "p"}:
+        return "project"
+    if value in {"global", "g"}:
+        return "global"
+    raise SkillInstallError("Skill scope must be project or global")
+
+
+def _skill_targets(args: argparse.Namespace, scope: str, *, non_interactive: bool = False) -> list[str]:
+    if getattr(args, "all_agents", False):
+        return [target.target_id for target in SKILL_TARGETS if scope == "project" or target.global_root is not None]
+    explicit = parse_skill_targets(getattr(args, "agents", []))
+    if explicit:
+        return explicit
+
+    detected = detect_skill_targets(scope)
+    if non_interactive or getattr(args, "yes", False):
+        if detected:
+            return detected
+        raise SkillInstallError("No Agent was detected; specify --agent or --all-agents")
+
+    candidates = [target for target in SKILL_TARGETS if target.target_id in detected] or [
+        target for target in SKILL_TARGETS if scope == "project" or target.global_root is not None
+    ]
+    print("Available Agent targets:")
+    for index, target in enumerate(candidates, start=1):
+        marker = " (detected)" if target.target_id in detected else ""
+        print(f"  {index}. {target.target_id} - {target.label}{marker}")
+    default = ",".join(target.target_id for target in candidates if target.target_id in detected)
+    prompt = "Select Agent numbers or names separated by commas"
+    if default:
+        prompt += f" [{default}]"
+    raw = _prompt(prompt + ": ") or default
+    if not raw:
+        return []
+    selected: list[str] = []
+    names: list[str] = []
+    for token in raw.replace(";", ",").split(","):
+        value = token.strip()
+        if value.isdigit() and 1 <= int(value) <= len(candidates):
+            selected.append(candidates[int(value) - 1].target_id)
+        elif value:
+            names.append(value)
+    selected.extend(parse_skill_targets(names))
+    return list(dict.fromkeys(selected))
+
+
+def _show_skill_preview(scope: str, targets: list[str], skill_name: str) -> None:
+    print(f"Canonical: {canonical_skill_path(skill_name, scope=scope)}")
+    for target_id in targets:
+        print(f"  {target_id}: {skill_target_path(target_id, scope, skill_name=skill_name)}")
+
+
+def _skill_copy_mode(args: argparse.Namespace, *, non_interactive: bool = False) -> bool:
+    if getattr(args, "copy", False):
+        return True
+    if non_interactive or getattr(args, "yes", False):
+        return False
+    value = _prompt("Installation method [symlink/copy] (symlink): ").lower()
+    if value in {"", "symlink", "link", "s"}:
+        return False
+    if value in {"copy", "c"}:
+        return True
+    raise SkillInstallError("Installation method must be symlink or copy")
+
+
+def _run_skill_command(args: argparse.Namespace) -> dict[str, Any]:
+    names = parse_skill_names(args.name)
+    scope = _skill_scope(args)
+    targets = _skill_targets(args, scope)
+    if not targets:
+        raise SkillInstallError("No Agent target selected")
+    copy_mode = _skill_copy_mode(args) if args.skills_command == "install" else False
+    mutating = args.skills_command in {"install", "uninstall", "update"}
+    if mutating and not args.yes:
+        for skill_name in names:
+            _show_skill_preview(scope, targets, skill_name)
+        if not _prompt_yes_no(f"Continue with skills {args.skills_command}?"):
+            return {"ok": True, "cancelled": True, "operation": args.skills_command}
+
+    results: list[dict[str, Any]] = []
+    for skill_name in names:
+        kwargs = {"scope": scope, "skill_name": skill_name}
+        if args.skills_command == "install":
+            result = install_skill_targets(targets, copy=copy_mode, **kwargs)
+        elif args.skills_command == "uninstall":
+            result = uninstall_skill_targets(targets, **kwargs)
+        elif args.skills_command == "update":
+            result = update_skill_targets(targets, **kwargs)
+        else:
+            result = status_skill_targets(targets, **kwargs)
+        results.append(result)
+    if len(results) == 1:
+        return results[0]
+    return {"ok": all(result.get("ok") for result in results), "operation": args.skills_command, "results": results}
+
+
+def _setup_skill_install(args: argparse.Namespace) -> dict[str, Any] | None:
+    explicit_targets = bool(args.agents or args.all_agents)
+    if args.non_interactive and not explicit_targets:
+        return None
+    if not args.non_interactive and not explicit_targets and not _prompt_yes_no("Install the bundled Agent skill?"):
+        return None
+    scope = _skill_scope(args, non_interactive=args.non_interactive)
+    targets = _skill_targets(args, scope, non_interactive=args.non_interactive)
+    if not targets:
+        return {"ok": True, "cancelled": True, "operation": "install"}
+    copy_mode = _skill_copy_mode(args, non_interactive=args.non_interactive)
+    if not args.non_interactive and not args.yes:
+        _show_skill_preview(scope, targets, SKILL_NAME)
+        if not _prompt_yes_no("Install skill to these Agent targets?"):
+            return {"ok": True, "cancelled": True, "operation": "install"}
+    return install_skill_targets(targets, scope=scope, copy=copy_mode)
+
+
 async def _run_async(args: argparse.Namespace) -> int:
     if args.command == "search":
         data = await service.search_answer(args.query, timeout_seconds=args.timeout, debug=args.debug) if args.operation == "answer" else await service.search_sources(args.query, limit=args.limit, start_published_date=args.start_published_date, include_domains=args.include_domains, exclude_domains=args.exclude_domains, category=args.category, include_text=args.include_text, include_highlights=args.include_highlights, debug=args.debug)
@@ -308,7 +469,14 @@ async def _run_async(args: argparse.Namespace) -> int:
             result = service.config_set(key, value)
             if not result.get("ok"):
                 errors.append(result.get("error", key))
-        data = {"ok": not errors, "config_file": str(service.config.config_file), "saved": sorted(values), "errors": errors}
+        skill_install = _setup_skill_install(args) if not errors else None
+        data = {
+            "ok": not errors and (skill_install is None or skill_install.get("ok", False)),
+            "config_file": str(service.config.config_file),
+            "saved": sorted(values),
+            "errors": errors,
+            "skill_install": skill_install,
+        }
     elif args.command == "doctor":
         data = await service.doctor()
     elif args.command == "diagnose":
@@ -333,9 +501,7 @@ async def _run_async(args: argparse.Namespace) -> int:
             data = service.config_unset(args.key)
     elif args.command == "skills":
         try:
-            targets = parse_skill_targets(args.targets)
-            kwargs = {"project_root": args.project_root or None, "source_root": args.source_root or None}
-            data = status_skill_targets(targets, **kwargs) if args.skills_command == "status" else install_skill_targets(targets, **kwargs)
+            data = _run_skill_command(args)
         except SkillInstallError as exc:
             data = {"ok": False, "error_type": "parameter_error", "error": str(exc)}
     else:
@@ -347,6 +513,12 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return asyncio.run(_run_async(args))
+    except SkillInstallError as exc:
+        return _print_result(
+            {"ok": False, "error_type": "parameter_error", "error": str(exc)},
+            getattr(args, "format", "json"),
+            getattr(args, "output", ""),
+        )
     except KeyboardInterrupt:
         return 130
 

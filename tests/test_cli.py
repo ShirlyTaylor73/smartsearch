@@ -13,7 +13,9 @@ from smart_search import cli
     ["map", "site", "--help"], ["diagnose", "provider", "--help"],
     ["diagnose", "route", "--help"], ["diagnose", "smoke", "--help"],
     ["dev", "regression", "--help"], ["doctor", "--help"],
-    ["setup", "--help"], ["config", "list", "--help"], ["skills", "status", "--help"],
+    ["setup", "--help"], ["config", "list", "--help"],
+    ["skills", "install", "--help"], ["skills", "uninstall", "--help"],
+    ["skills", "status", "--help"], ["skills", "update", "--help"],
 ])
 def test_public_help(argv):
     with pytest.raises(SystemExit) as exc:

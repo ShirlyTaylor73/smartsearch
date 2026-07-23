@@ -110,7 +110,7 @@ def test_release_docs_explain_new_package_and_migration():
 
     npx_markers = [
         "npx --yes --package=@shirlytaylor73/smart-search@next",
-        "smart-search skills update --targets codex",
+        "smart-search skills install --project --agent codex --yes",
     ]
     for marker in npx_markers:
         assert marker in readme
@@ -125,7 +125,9 @@ def test_npx_skill_installation_is_part_of_package_validation():
     assert '"--yes"' in npx_test
     assert "--package=" in npx_test
     assert '"skills"' in npx_test
-    assert '"update"' in npx_test
+    assert '"install"' in npx_test
+    assert '"--project"' in npx_test
+    assert '"--agent"' in npx_test
     assert '"codex"' in npx_test
 
 
