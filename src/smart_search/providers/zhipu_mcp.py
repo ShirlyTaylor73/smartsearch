@@ -116,14 +116,24 @@ def _parse_markdown_results(text: str, provider: str) -> list[dict[str, str]]:
     return [{"title": url, "url": url, "description": "", "provider": provider} for url in dict.fromkeys(urls)]
 
 
+def _mcp_error_type(message: str, code: Any = None) -> str:
+    lowered = (message or "").lower()
+    normalized_code = str(code).strip() if code is not None else ""
+    if normalized_code in {"-401", "401"} or "-401" in lowered or "api key" in lowered:
+        return "auth_error"
+    if normalized_code in {"-429", "429", "1302"} or any(
+        marker in lowered for marker in ("-429", '"1302"', "rate limit", "rate_limit", "too many requests", "速率限制")
+    ):
+        return "rate_limited"
+    return "provider_error"
+
+
 def _content_error(text: str) -> tuple[str, str] | None:
     stripped = (text or "").strip()
     if not stripped:
         return None
     if stripped.lower().startswith("mcp error"):
-        lowered = stripped.lower()
-        error_type = "auth_error" if "-401" in stripped or "api key" in lowered else "provider_error"
-        return error_type, stripped
+        return _mcp_error_type(stripped), stripped
     decoded: Any = stripped
     for _ in range(2):
         if not isinstance(decoded, str):
@@ -133,7 +143,10 @@ def _content_error(text: str) -> tuple[str, str] | None:
         except json.JSONDecodeError:
             break
     if isinstance(decoded, dict) and decoded.get("error"):
-        return "provider_error", str(decoded.get("error"))
+        error = decoded.get("error")
+        code = error.get("code") if isinstance(error, dict) else None
+        message = str(error)
+        return _mcp_error_type(message, code), message
     return None
 
 
@@ -226,11 +239,12 @@ class ZhipuMCPProvider:
         if "error" in data:
             error = data.get("error") or {}
             message = error.get("message") if isinstance(error, dict) else str(error)
+            code = error.get("code") if isinstance(error, dict) else None
             return {
                 "ok": False,
                 "provider": self.provider_id,
                 "tool": name,
-                "error_type": "provider_error",
+                "error_type": _mcp_error_type(message or "", code),
                 "error": message or "Zhipu MCP JSON-RPC error",
                 "elapsed_ms": _elapsed_ms(start),
             }

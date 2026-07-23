@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 
-from smart_search.providers.zhipu_mcp import ZhipuMCPProvider
+from smart_search.providers.zhipu_mcp import ZhipuMCPProvider, _content_error
 
 
 class FakeZReadClient:
@@ -90,3 +90,26 @@ async def test_zread_redacts_token_from_http_error():
     data = json.loads(await provider.read_file("owner/repo", "README.md"))
     assert data["error_type"] == "auth_error"
     assert "secret" not in data["error"]
+
+
+def test_zread_classifies_mcp_rate_limit_content():
+    message = 'MCP error -429: {"error":{"code":"1302","message":"您的账户已达到速率限制"}}'
+
+    assert _content_error(message) == ("rate_limited", message)
+
+
+def test_zread_classifies_jsonrpc_rate_limit_error():
+    provider = ZhipuMCPProvider(
+        "https://open.bigmodel.cn/api/mcp/zread/mcp",
+        "secret",
+        provider_id="zhipu-mcp-zread",
+    )
+
+    output = provider._normalize_response(
+        "get_repo_structure",
+        {"repo_name": "owner/repo"},
+        {"jsonrpc": "2.0", "id": 2, "error": {"code": -429, "message": "Too many requests"}},
+        0,
+    )
+
+    assert output["error_type"] == "rate_limited"

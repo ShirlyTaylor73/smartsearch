@@ -114,7 +114,8 @@ def test_env_dir_also_governs_log_dir_parent(monkeypatch, tmp_path):
     assert not (target / "logs").exists()
 
 
-def test_firecrawl_timeout_defaults_to_thirty_seconds(monkeypatch):
+def test_firecrawl_timeout_defaults_to_thirty_seconds(monkeypatch, tmp_path):
+    monkeypatch.setenv("SMART_SEARCH_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.delenv("FIRECRAWL_TIMEOUT_SECONDS", raising=False)
     config = _fresh_config_file(monkeypatch)
     assert config.firecrawl_timeout == 30.0
@@ -123,7 +124,8 @@ def test_firecrawl_timeout_defaults_to_thirty_seconds(monkeypatch):
     assert info["config_sources"]["FIRECRAWL_TIMEOUT_SECONDS"] == "default"
 
 
-def test_firecrawl_timeout_can_be_configured(monkeypatch):
+def test_firecrawl_timeout_can_be_configured(monkeypatch, tmp_path):
+    monkeypatch.setenv("SMART_SEARCH_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.setenv("FIRECRAWL_TIMEOUT_SECONDS", "45")
     config = _fresh_config_file(monkeypatch)
     assert config.firecrawl_timeout == 45.0
