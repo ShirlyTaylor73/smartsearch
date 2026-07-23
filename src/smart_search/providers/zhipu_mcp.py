@@ -8,6 +8,7 @@ import httpx
 
 
 MCP_REQUESTED_PROTOCOL_VERSION = "2025-03-26"
+URL_PATTERN = r"https?://[^\s)>\]\"']+"
 
 
 class MCPProtocolError(Exception):
@@ -100,7 +101,7 @@ def _parse_markdown_results(text: str, provider: str) -> list[dict[str, str]]:
                 results.append(current)
             current = {"title": heading.group(1).strip(), "url": "", "description": "", "provider": provider}
             continue
-        url_match = re.search(r"https?://[^\s)>\]]+", line)
+        url_match = re.search(URL_PATTERN, line)
         if url_match:
             if current is None:
                 current = {"title": url_match.group(0), "url": "", "description": "", "provider": provider}
@@ -112,7 +113,7 @@ def _parse_markdown_results(text: str, provider: str) -> list[dict[str, str]]:
         results.append(current)
     if results:
         return results
-    urls = re.findall(r"https?://[^\s)>\]]+", text)
+    urls = re.findall(URL_PATTERN, text)
     return [{"title": url, "url": url, "description": "", "provider": provider} for url in dict.fromkeys(urls)]
 
 
@@ -147,6 +148,10 @@ def _content_error(text: str) -> tuple[str, str] | None:
         code = error.get("code") if isinstance(error, dict) else None
         message = str(error)
         return _mcp_error_type(message, code), message
+    if isinstance(decoded, str) and re.search(r"\bmessage\s*:\s*tool execute error\b", decoded, re.IGNORECASE):
+        code_match = re.search(r"\bcode\s*:\s*(-?\d+)", decoded, re.IGNORECASE)
+        code = code_match.group(1) if code_match else None
+        return _mcp_error_type(decoded, code), decoded.strip()
     return None
 
 

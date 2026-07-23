@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 
-from smart_search.providers.zhipu_mcp import ZhipuMCPProvider, _content_error
+from smart_search.providers.zhipu_mcp import ZhipuMCPProvider, _content_error, _parse_markdown_results
 
 
 class FakeZReadClient:
@@ -113,3 +113,59 @@ def test_zread_classifies_jsonrpc_rate_limit_error():
     )
 
     assert output["error_type"] == "rate_limited"
+
+
+def test_zread_classifies_quoted_tool_execution_error():
+    message = '"code: 1015, message: tool execute error, error: 路径不存在"'
+
+    assert _content_error(message) == (
+        "provider_error",
+        "code: 1015, message: tool execute error, error: 路径不存在",
+    )
+
+
+def test_zread_normalizes_tool_execution_error_as_failed_response():
+    provider = ZhipuMCPProvider(
+        "https://open.bigmodel.cn/api/mcp/zread/mcp",
+        "secret",
+        provider_id="zhipu-mcp-zread",
+    )
+
+    output = provider._normalize_response(
+        "get_repo_structure",
+        {"repo_name": "owner/repo", "dir_path": "missing"},
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": '"code: 1015, message: tool execute error, error: 路径不存在"',
+                    }
+                ]
+            },
+        },
+        0,
+    )
+
+    assert output["ok"] is False
+    assert output["error_type"] == "provider_error"
+    assert output["error"] == "code: 1015, message: tool execute error, error: 路径不存在"
+    assert output["results"] == []
+
+
+def test_zread_result_urls_exclude_json_string_quotes():
+    results = _parse_markdown_results(
+        '"Directory Structure of upstash/context7. View at: https://zread.ai/upstash/context7"',
+        "zhipu-mcp-zread",
+    )
+
+    assert results == [
+        {
+            "title": "https://zread.ai/upstash/context7",
+            "url": "https://zread.ai/upstash/context7",
+            "description": "",
+            "provider": "zhipu-mcp-zread",
+        }
+    ]
