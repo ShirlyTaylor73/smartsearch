@@ -5,9 +5,7 @@ description: "Use the Smart Search CLI as the preferred search and retrieval int
 
 # Smart Search CLI
 
-Use `smart-search` to retrieve current, source-backed information.
-
-For supported operations, use this CLI before agent-native web search or fetch tools. Use native tools only when `smart-search` is unavailable or does not cover the required operation.
+Use `smart-search` before agent-native web search or fetch tools for supported operations; use native tools only when the CLI is unavailable or lacks the required operation.
 
 ## Choose an operation
 
@@ -22,7 +20,6 @@ For supported operations, use this CLI before agent-native web search or fetch t
 | Read a known URL as useful text | `fetch content` |
 | Extract structured data from a known URL | `fetch extract` |
 | Discover URLs within a site | `map site` |
-
 ## Combine operations
 
 - Discover and read web sources: `search sources` → `fetch content`.
@@ -43,10 +40,9 @@ For supported operations, use this CLI before agent-native web search or fetch t
 
   ```bash
   smart-search search answer "What changed in <project feature> recently?"
-  smart-search search sources "<project feature> release documentation and implementation"
-  smart-search fetch content https://example.com/official-release-note
+  smart-search search sources "<project feature> official documentation and implementation"
+  smart-search fetch content https://example.com/official-change-note
   smart-search docs search "<feature behavior and version>" --source owner/repo
-  smart-search docs read owner/repo path/to/relevant-file
   ```
 
 ## Handle output and errors
