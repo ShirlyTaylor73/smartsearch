@@ -40,6 +40,7 @@ jobs:
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -94,11 +95,6 @@ jobs:
           echo "name=$(node -p "require('./package.json').name")" >> "$GITHUB_OUTPUT"
           echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
-      - name: Verify npm authentication
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm whoami
-
       - name: Check whether this npm version already exists
         id: npm-version
         shell: bash
@@ -111,9 +107,7 @@ jobs:
 
       - name: Publish to npm
         if: steps.npm-version.outputs.published != 'true'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --provenance --tag "${{ steps.release.outputs.tag }}"
+        run: npm publish --access public --tag "${{ steps.release.outputs.tag }}"
 
       - name: Skip existing npm version
         if: steps.npm-version.outputs.published == 'true'

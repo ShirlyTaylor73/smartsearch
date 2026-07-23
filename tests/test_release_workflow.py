@@ -72,7 +72,7 @@ def test_package_metadata_belongs_to_fork_and_uses_breaking_release_version():
     assert package_lock["packages"][""]["name"] == PACKAGE_NAME
 
 
-def test_publish_workflow_uses_manual_beta_tag_stable_and_token_auth():
+def test_publish_workflow_uses_manual_beta_tag_stable_and_trusted_publishing():
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
     assert "workflow_dispatch:" in workflow
@@ -84,8 +84,11 @@ def test_publish_workflow_uses_manual_beta_tag_stable_and_token_auth():
     assert 'tag="next"' in workflow
     assert 'tag="latest"' in workflow
     assert "Refusing to publish prerelease version" in workflow
-    assert "NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}" in workflow
-    assert "npm publish --access public --provenance" in workflow
+    assert "id-token: write" in workflow
+    assert "package-manager-cache: false" in workflow
+    assert "NODE_AUTH_TOKEN" not in workflow
+    assert "npm whoami" not in workflow
+    assert "npm publish --access public --tag" in workflow
     assert 'expected_package="@shirlytaylor73/smart-search"' in workflow
     assert 'notes_file=".github/releases/v${version}.md"' in workflow
     assert 'notes_footer="$(printf' in workflow
