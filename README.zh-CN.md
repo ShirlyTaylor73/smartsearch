@@ -4,11 +4,29 @@
 
 ## 安装
 
+日常执行搜索命令时，全局安装 CLI：
+
 ```bash
 npm install -g @shirlytaylor73/smart-search@next
 smart-search --version
 smart-search setup
 ```
+
+使用本包自己的 `npx` 命令一次性安装或更新 Agent skill；仅安装 skill 时不需要预先全局安装 CLI：
+
+```bash
+npx --yes --package=@shirlytaylor73/smart-search@next \
+  smart-search skills update --targets codex
+```
+
+默认安装到用户主目录下对应 Agent 的 skill 目录。安装到当前项目，或同时安装到多个 Agent：
+
+```bash
+npx --yes --package=@shirlytaylor73/smart-search@next \
+  smart-search skills update --targets codex,claude,cursor --project-root "$PWD"
+```
+
+全局安装 CLI 后，可运行 `smart-search skills status --targets codex`，比较已安装 skill 与包内版本是否一致。
 
 Python 源码位于 `src/smart_search/`；npm 包只是跨平台启动包装器，安装时创建 Python 环境并调用 `python -m smart_search.cli`。
 

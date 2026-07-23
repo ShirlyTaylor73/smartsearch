@@ -63,12 +63,12 @@ def test_package_metadata_belongs_to_fork_and_uses_breaking_release_version():
     package_lock = json.loads((ROOT / "package-lock.json").read_text(encoding="utf-8"))
 
     assert package["name"] == PACKAGE_NAME
-    assert package["version"] == "0.3.0-beta.1"
+    assert package["version"] == "0.3.0-beta.2"
     assert package["homepage"] == "https://github.com/ShirlyTaylor73/smartsearch#readme"
     assert package["repository"]["url"] == "git+https://github.com/ShirlyTaylor73/smartsearch.git"
     assert package["bugs"]["url"] == "https://github.com/ShirlyTaylor73/smartsearch/issues"
     assert package_lock["name"] == PACKAGE_NAME
-    assert package_lock["version"] == "0.3.0-beta.1"
+    assert package_lock["version"] == "0.3.0-beta.2"
     assert package_lock["packages"][""]["name"] == PACKAGE_NAME
 
 
@@ -104,6 +104,27 @@ def test_release_docs_explain_new_package_and_migration():
     zh_required_markers = ["@shirlytaylor73/smart-search@next", "Python", "0.3.0-beta", "Exa", "Firecrawl"]
     for marker in zh_required_markers:
         assert marker in readme_zh
+
+    npx_markers = [
+        "npx --yes --package=@shirlytaylor73/smart-search@next",
+        "smart-search skills update --targets codex",
+    ]
+    for marker in npx_markers:
+        assert marker in readme
+        assert marker in readme_zh
+
+
+def test_npx_skill_installation_is_part_of_package_validation():
+    package_test = (ROOT / "npm" / "scripts" / "test.js").read_text(encoding="utf-8")
+    npx_test = (ROOT / "npm" / "scripts" / "test-npx-skill-install.js").read_text(encoding="utf-8")
+
+    assert "test-npx-skill-install.js" in package_test
+    assert '"--yes"' in npx_test
+    assert "--package=" in npx_test
+    assert '"skills"' in npx_test
+    assert '"update"' in npx_test
+    assert '"codex"' in npx_test
+
 
 def test_current_stable_release_notes_describe_user_visible_changes():
     notes = (ROOT / ".github" / "releases" / "v0.2.0.md").read_text(encoding="utf-8")

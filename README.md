@@ -4,11 +4,29 @@
 
 ## Install
 
+Install the CLI globally for regular search commands:
+
 ```bash
 npm install -g @shirlytaylor73/smart-search@next
 smart-search --version
 smart-search setup
 ```
+
+Install or update the bundled Agent skill with this package's own `npx` command. This one-time skill installation does not require a global CLI installation:
+
+```bash
+npx --yes --package=@shirlytaylor73/smart-search@next \
+  smart-search skills update --targets codex
+```
+
+The default destination is the selected Agent's skill directory under the user home. To install into the current project, or to target multiple Agents:
+
+```bash
+npx --yes --package=@shirlytaylor73/smart-search@next \
+  smart-search skills update --targets codex,claude,cursor --project-root "$PWD"
+```
+
+Use `smart-search skills status --targets codex` after global CLI installation to compare an installed skill with the bundled version.
 
 The CLI source is Python under `src/smart_search/`. The npm package is a cross-platform launcher that creates the Python environment and runs `python -m smart_search.cli`.
 
