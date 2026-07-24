@@ -15,6 +15,7 @@ function run(command, args, options = {}) {
     cwd: options.cwd || packageRoot,
     encoding: "utf8",
     env: { ...process.env, npm_config_cache: npmCache },
+    shell: process.platform === "win32",
     windowsHide: true
   });
   if (result.error || result.status !== 0) {
