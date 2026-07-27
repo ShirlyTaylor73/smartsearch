@@ -52,6 +52,26 @@ def test_search_sources_passes_filters(monkeypatch):
     assert captured["include_domains"] == ["example.com"]
 
 
+def test_fetch_extract_passes_prompt_and_schema(monkeypatch, capsys):
+    captured = {}
+
+    async def fake(url, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return {"ok": True, "capability": "fetch", "operation": "extract", "content": "", "sources": [], "data": {"title": "Page"}, "elapsed_ms": 1}
+
+    monkeypatch.setattr(cli.service, "fetch_extract", fake)
+    assert cli.main([
+        "fetch", "extract", "https://example.com",
+        "--prompt", "Extract the title",
+        "--schema", '{"type":"object","properties":{"title":{"type":"string"}}}',
+    ]) == 0
+    assert captured["url"] == "https://example.com"
+    assert captured["prompt"] == "Extract the title"
+    assert captured["schema"]["type"] == "object"
+    assert json.loads(capsys.readouterr().out)["data"] == {"title": "Page"}
+
+
 @pytest.mark.parametrize(("argv", "service_name"), [
     (["docs", "resolve", "react"], "docs_resolve"),
     (["docs", "search", "hooks"], "docs_search"),
@@ -77,4 +97,26 @@ def test_output_file(monkeypatch, tmp_path, capsys):
     output = tmp_path / "answer.json"
     assert cli.main(["search", "answer", "q", "--output", str(output)]) == 0
     assert json.loads(output.read_text())["content"] == "answer"
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize(
+    ("result", "exit_code"),
+    [
+        ({"ok": True, "capability": "fetch", "operation": "extract", "content": "", "sources": [], "data": {"title": "Page"}, "raw_evidence": "evidence", "elapsed_ms": 1}, 0),
+        ({"ok": False, "capability": "fetch", "operation": "extract", "content": "", "sources": [], "data": None, "raw_evidence": "", "error_type": "parameter_error", "error": "prompt required", "elapsed_ms": 1}, 1),
+    ],
+)
+def test_fetch_extract_output_file_is_complete(monkeypatch, tmp_path, capsys, result, exit_code):
+    async def fake(*args, **kwargs):
+        return result
+
+    monkeypatch.setattr(cli.service, "fetch_extract", fake)
+    output = tmp_path / "extract.json"
+    assert cli.main([
+        "fetch", "extract", "https://example.com",
+        "--prompt", "Extract the title",
+        "--output", str(output),
+    ]) == exit_code
+    assert json.loads(output.read_text(encoding="utf-8")) == result
     assert capsys.readouterr().out == ""

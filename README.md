@@ -64,9 +64,12 @@ smart-search docs search "recent important PRs" --source owner/repo
 smart-search docs tree owner/repo --path src
 smart-search docs read owner/repo README.md --format content
 smart-search fetch content https://example.com/article --format content
+smart-search fetch extract https://www.python.org/downloads/ --prompt "Extract the latest stable Python 3 release"
 smart-search fetch extract https://example.com/product --schema '{"type":"object","properties":{"name":{"type":"string"}}}'
 smart-search map site https://docs.example.com --search authentication --sitemap include --limit 50
 ```
+
+`fetch extract` requires at least one of `--prompt` or `--schema`; both may be combined. Prompt-only extraction lets Firecrawl infer the output structure, while a schema constrains it.
 
 Firecrawl Map defaults are `sitemap=include`, include subdomains, ignore query parameters, use cache, and `limit=5000`. CLI timeout values are seconds and are converted to milliseconds. `--location` accepts JSON such as `{"country":"US","languages":["en-US"]}`.
 

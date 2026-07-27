@@ -69,7 +69,7 @@ def test_agent_skill_references_document_the_current_cli_parameters():
         assert marker in references["search.md"]
     for marker in ("NAME", "QUERY", "--source", "REPO", "--path", "PATH"):
         assert marker in references["docs.md"]
-    for marker in ("URL", "--schema", "--max-length", "raw_evidence", "data"):
+    for marker in ("URL", "--schema", "--prompt", "--max-length", "raw_evidence", "data"):
         assert marker in references["fetch.md"]
     for marker in (
         "--search",

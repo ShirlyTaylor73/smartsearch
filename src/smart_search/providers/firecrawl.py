@@ -86,9 +86,11 @@ class FirecrawlProvider:
         except Exception as exc:
             return {"ok": False, **_error_payload(exc, self.api_key), "elapsed_ms": _elapsed_ms(start)}
 
-    async def scrape_json(self, url: str, *, schema: dict[str, Any] | None = None, max_length: int = 20000) -> dict[str, Any]:
+    async def scrape_json(self, url: str, *, schema: dict[str, Any] | None = None, prompt: str = "", max_length: int = 20000) -> dict[str, Any]:
         start = time.time()
         json_format: dict[str, Any] = {"type": "json"}
+        if prompt:
+            json_format["prompt"] = prompt
         if schema is not None:
             json_format["schema"] = schema
         try:
@@ -96,7 +98,16 @@ class FirecrawlProvider:
             payload = response.get("data") or {}
             data = payload.get("json")
             if data is None:
-                raise KeyError("Firecrawl response missing data.json")
+                success = str(response.get("success", "unknown")).lower()
+                data_keys = ", ".join(sorted(payload)) or "none"
+                raw_evidence = json.dumps(response, ensure_ascii=False)
+                return {
+                    "ok": False,
+                    "error_type": "parse_error",
+                    "error": f"Firecrawl response missing data.json (success={success}; data keys: {data_keys})",
+                    "raw_evidence": raw_evidence[:max_length],
+                    "elapsed_ms": _elapsed_ms(start),
+                }
             raw_evidence = json.dumps(payload, ensure_ascii=False)
             return {"ok": True, "data": data, "raw_evidence": raw_evidence[:max_length], "elapsed_ms": _elapsed_ms(start)}
         except Exception as exc:

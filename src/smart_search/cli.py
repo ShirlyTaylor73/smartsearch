@@ -175,10 +175,11 @@ def build_parser() -> argparse.ArgumentParser:
     fetch_content.add_argument("url")
     fetch_content.add_argument("--debug", action="store_true")
     _add_output_args(fetch_content)
-    extract = fetch_sub.add_parser("extract")
+    extract = fetch_sub.add_parser("extract", description="Extract structured data; provide --schema or --prompt, or combine both.")
     extract.add_argument("url")
-    extract.add_argument("--schema", default="")
-    extract.add_argument("--max-length", type=int, default=20000)
+    extract.add_argument("--schema", default="", help="JSON Schema object for the extracted data.")
+    extract.add_argument("--prompt", default="", help="Natural-language extraction intent; required when --schema is omitted.")
+    extract.add_argument("--max-length", type=int, default=20000, help="Maximum raw_evidence length. Default: 20000.")
     extract.add_argument("--debug", action="store_true")
     _add_output_args(extract)
 
@@ -459,7 +460,7 @@ async def _run_async(args: argparse.Namespace) -> int:
             except json.JSONDecodeError as exc:
                 data = {"ok": False, "capability": "fetch", "operation": "extract", "content": "", "sources": [], "elapsed_ms": 0, "data": None, "error_type": "parameter_error", "error": f"--schema must be valid JSON: {exc}"}
             else:
-                data = await service.fetch_extract(args.url, max_length=args.max_length, schema=schema, debug=args.debug)
+                data = await service.fetch_extract(args.url, max_length=args.max_length, schema=schema, prompt=args.prompt, debug=args.debug)
     elif args.command == "map":
         data = await service.map_site_operation(args.url, search=args.search, sitemap=args.sitemap, include_subdomains=args.include_subdomains, ignore_query_parameters=args.ignore_query_parameters, ignore_cache=args.ignore_cache, limit=args.limit, timeout=args.timeout, location=args.location, debug=args.debug)
     elif args.command == "setup":

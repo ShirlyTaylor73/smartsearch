@@ -64,9 +64,12 @@ smart-search docs search "最近的重要 PR" --source owner/repo
 smart-search docs tree owner/repo --path src
 smart-search docs read owner/repo README.md --format content
 smart-search fetch content https://example.com/article --format content
+smart-search fetch extract https://www.python.org/downloads/ --prompt "提取最新的 Python 3 正式版本"
 smart-search fetch extract https://example.com/product --schema '{"type":"object","properties":{"name":{"type":"string"}}}'
 smart-search map site https://docs.example.com --search authentication --sitemap include --limit 50
 ```
+
+`fetch extract` 至少需要 `--prompt` 或 `--schema` 之一，也可以同时提供。仅使用 prompt 时由 Firecrawl 推断输出结构，schema 用于约束结构。
 
 `map site` 默认使用 `sitemap=include`、包含子域名、忽略 query 参数、不忽略缓存、`limit=5000`。`--timeout` 单位为秒，内部转换为 Firecrawl 的毫秒；`--location` 接受 `{"country":"US","languages":["en-US"]}`。
 

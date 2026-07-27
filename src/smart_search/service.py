@@ -398,19 +398,22 @@ def validate_json_schema(schema: dict[str, Any] | None) -> dict[str, Any] | None
     return schema
 
 
-async def fetch_extract(url: str, *, max_length: int = 20000, schema: dict[str, Any] | None = None, debug: bool = False) -> dict[str, Any]:
+async def fetch_extract(url: str, *, max_length: int = 20000, schema: dict[str, Any] | None = None, prompt: str = "", debug: bool = False) -> dict[str, Any]:
     start = time.time()
-    if not config.firecrawl_api_key:
-        return _operation_envelope("fetch", "extract", ok=False, start=start, error_type="config_error", error="fetch.extract requires FIRECRAWL_API_KEY; run `smart-search diagnose fetch extract`", extra={"data": None})
     if max_length < 0:
         return _operation_envelope("fetch", "extract", ok=False, start=start, error_type="parameter_error", error="--max-length must be zero or greater", extra={"data": None})
     try:
         valid_schema = validate_json_schema(schema)
     except ValueError as exc:
         return _operation_envelope("fetch", "extract", ok=False, start=start, error_type="parameter_error", error=str(exc), extra={"data": None})
+    normalized_prompt = prompt.strip()
+    if valid_schema is None and not normalized_prompt:
+        return _operation_envelope("fetch", "extract", ok=False, start=start, error_type="parameter_error", error="fetch extract requires --schema or --prompt", extra={"data": None, "raw_evidence": ""})
+    if not config.firecrawl_api_key:
+        return _operation_envelope("fetch", "extract", ok=False, start=start, error_type="config_error", error="fetch.extract requires FIRECRAWL_API_KEY; run `smart-search diagnose fetch extract`", extra={"data": None})
     provider = FirecrawlProvider(config.firecrawl_api_url, config.firecrawl_api_key, config.firecrawl_timeout)
     try:
-        data = await _await_operation(provider.scrape_json(url, schema=valid_schema, max_length=max_length), start=start, timeout=operation_policy("fetch.extract")["timeout"])
+        data = await _await_operation(provider.scrape_json(url, schema=valid_schema, prompt=normalized_prompt, max_length=max_length), start=start, timeout=operation_policy("fetch.extract")["timeout"])
     except Exception as exc:
         error_type, error = _operation_exception(exc)
         data = {"ok": False, "error_type": error_type, "error": error}

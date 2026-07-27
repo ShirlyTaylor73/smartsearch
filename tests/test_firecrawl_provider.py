@@ -56,6 +56,58 @@ async def test_scrape_markdown_and_json_payloads():
 
 
 @pytest.mark.asyncio
+async def test_scrape_json_supports_prompt_and_schema_together():
+    FakeFirecrawlClient.responses = [
+        {"success": True, "data": {"json": {"title": "Page"}, "metadata": {"sourceURL": "https://example.com"}}},
+    ]
+    provider = FirecrawlProvider("https://api.firecrawl.dev/v2", "secret")
+
+    extracted = await provider.scrape_json(
+        "https://example.com",
+        prompt="Extract the title",
+        schema={"type": "object", "properties": {"title": {"type": "string"}}},
+    )
+
+    assert extracted["data"] == {"title": "Page"}
+    assert FakeFirecrawlClient.calls[0]["json"]["formats"] == [
+        {
+            "type": "json",
+            "prompt": "Extract the title",
+            "schema": {"type": "object", "properties": {"title": {"type": "string"}}},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_scrape_json_supports_prompt_without_schema():
+    FakeFirecrawlClient.responses = [
+        {"success": True, "data": {"json": {"title": "Page"}}},
+    ]
+    provider = FirecrawlProvider("https://api.firecrawl.dev/v2", "secret")
+
+    extracted = await provider.scrape_json("https://example.com", prompt="Extract the title")
+
+    assert extracted["data"] == {"title": "Page"}
+    assert FakeFirecrawlClient.calls[0]["json"]["formats"] == [
+        {"type": "json", "prompt": "Extract the title"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_scrape_json_reports_valid_response_missing_json():
+    FakeFirecrawlClient.responses = [
+        {"success": True, "data": {"metadata": {"creditsUsed": 5}, "warning": "No extraction intent"}},
+    ]
+    provider = FirecrawlProvider("https://api.firecrawl.dev/v2", "secret")
+
+    result = await provider.scrape_json("https://example.com", prompt="Extract the title")
+
+    assert result["ok"] is False
+    assert result["error_type"] == "parse_error"
+    assert result["error"] == "Firecrawl response missing data.json (success=true; data keys: metadata, warning)"
+
+
+@pytest.mark.asyncio
 async def test_map_payload_and_normalization():
     FakeFirecrawlClient.responses = [{"data": {"links": ["https://example.com/a", {"url": "https://example.com/b", "title": "B"}]}}]
     provider = FirecrawlProvider("https://api.firecrawl.dev/v2", "secret")
@@ -86,4 +138,14 @@ async def test_fetch_extract_rejects_non_object_schema_before_network(monkeypatc
     result = await service.fetch_extract("https://example.com", schema=[])
     assert result["ok"] is False
     assert result["error_type"] == "parameter_error"
+    assert FakeFirecrawlClient.calls == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_extract_requires_schema_or_prompt_before_network(monkeypatch):
+    result = await service.fetch_extract("https://example.com", prompt="   ")
+
+    assert result["ok"] is False
+    assert result["error_type"] == "parameter_error"
+    assert result["error"] == "fetch extract requires --schema or --prompt"
     assert FakeFirecrawlClient.calls == []
