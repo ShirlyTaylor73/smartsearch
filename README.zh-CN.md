@@ -126,4 +126,4 @@ npm test
 smart-search diagnose smoke --mode mock
 ```
 
-当前稳定版为 `0.3.2`，npm dist-tag 使用 `latest`。
+当前稳定版为 `0.3.3`，npm dist-tag 使用 `latest`。
