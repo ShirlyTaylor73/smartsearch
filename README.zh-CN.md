@@ -12,7 +12,17 @@ smart-search --version
 smart-search setup
 ```
 
-交互式 `smart-search setup` 在保存 provider 配置后会询问是否安装 bundled Agent skill。也可使用本包自己的 `npx` 命令单独安装，无需预先全局安装 CLI：
+交互式 `smart-search setup` 使用方向键选择 Grok transport 和 skill scope，Agent 目标使用空格多选，确认操作使用 Y/N；API key 输入会隐藏。向导会逐项确认已有配置，默认保留，并在最终确认后统一保存配置和安装 bundled Agent skill。
+
+环境变量中的配置会标记为外部管理，不会被复制进配置文件。Esc/Ctrl-C 会在写入前取消并返回退出码 130。管道、CI 等非 TTY 环境不会退回到手输菜单，应使用显式参数：
+
+```bash
+smart-search setup --non-interactive \
+  --grok-transport xai-responses \
+  --xai-api-key "$XAI_API_KEY"
+```
+
+也可使用本包自己的 `npx` 命令单独安装 skill，无需预先全局安装 CLI：
 
 ```bash
 npx --yes --package=@shirlytaylor73/smart-search@latest \
@@ -34,10 +44,13 @@ npx --yes --package=@shirlytaylor73/smart-search@latest \
 独立管理命令：
 
 ```bash
+smart-search skills install       # 方向键/空格交互选择
 smart-search skills status --project --agent codex --yes
 smart-search skills update --project --agent codex --yes
 smart-search skills uninstall --project --agent codex --yes
 ```
+
+`skills install|update|uninstall|status` 共用相同的 scope 和 Agent 选择界面。非 TTY 环境使用 `--project`/`--global`、一个或多个 `--agent`，变更操作再加 `--yes`。
 
 Python 源码位于 `src/smart_search/`；npm 包只是跨平台启动包装器，安装时创建 Python 环境并调用 `python -m smart_search.cli`。
 

@@ -12,7 +12,17 @@ smart-search --version
 smart-search setup
 ```
 
-Interactive `smart-search setup` offers to install the bundled Agent skill after provider configuration. You can also install it independently with this package's own `npx` command, without a prior global CLI installation:
+Interactive `smart-search setup` uses arrow-key selection for the Grok transport and skill scope, Space for multi-selecting Agent targets, and Y/N confirmations. API key input is hidden. Existing values are confirmed one by one and kept by default; configuration and bundled skill installation start only after the final confirmation.
+
+Environment-provided values are shown as externally managed and are never copied into the config file. Esc/Ctrl-C cancels before writing and exits with status 130. Pipes and CI do not fall back to text menus; use explicit options instead:
+
+```bash
+smart-search setup --non-interactive \
+  --grok-transport xai-responses \
+  --xai-api-key "$XAI_API_KEY"
+```
+
+You can also install the skill independently with this package's own `npx` command, without a prior global CLI installation:
 
 ```bash
 npx --yes --package=@shirlytaylor73/smart-search@latest \
@@ -34,10 +44,13 @@ Current targets: `codex`, `claude`, `cursor`, `opencode`, `copilot`, `gemini`, `
 Manage an existing installation independently:
 
 ```bash
+smart-search skills install       # interactive arrow-key/Space selection
 smart-search skills status --project --agent codex --yes
 smart-search skills update --project --agent codex --yes
 smart-search skills uninstall --project --agent codex --yes
 ```
+
+`skills install|update|uninstall|status` share the same scope and Agent selectors. In non-TTY environments, pass `--project` or `--global`, one or more `--agent` values, and `--yes` for mutating operations.
 
 The CLI source is Python under `src/smart_search/`. The npm package is a cross-platform launcher that creates the Python environment and runs `python -m smart_search.cli`.
 

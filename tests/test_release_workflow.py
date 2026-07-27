@@ -129,6 +129,9 @@ def test_npx_skill_installation_is_part_of_package_validation():
     assert '"--project"' in npx_test
     assert '"--agent"' in npx_test
     assert '"codex"' in npx_test
+    assert '"setup"' in npx_test
+    assert '"--non-interactive"' in npx_test
+    assert "SMART_SEARCH_CONFIG_DIR" in npx_test
 
 
 def test_bundled_skill_has_one_repository_source():

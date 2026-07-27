@@ -14,7 +14,7 @@ function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd || packageRoot,
     encoding: "utf8",
-    env: { ...process.env, npm_config_cache: npmCache },
+    env: { ...process.env, npm_config_cache: npmCache, ...(options.env || {}) },
     shell: process.platform === "win32",
     windowsHide: true
   });
@@ -32,6 +32,31 @@ try {
     run(npmCommand, ["pack", "--json", "--pack-destination", tempRoot])
   );
   const tarball = path.join(tempRoot, packed[0].filename);
+
+  const setupConfigRoot = path.join(tempRoot, "config");
+  const setupOutput = run(npxCommand, [
+    "--yes",
+    `--package=${tarball}`,
+    "smart-search",
+    "setup",
+    "--non-interactive",
+    "--grok-transport",
+    "xai-responses",
+    "--xai-api-key",
+    "packaged-test-key",
+    "--format",
+    "json"
+  ], {
+    cwd: projectRoot,
+    env: { SMART_SEARCH_CONFIG_DIR: setupConfigRoot }
+  });
+  const setupResult = JSON.parse(setupOutput);
+  if (!setupResult.ok || !setupResult.saved.includes("XAI_API_KEY")) {
+    throw new Error("packaged non-interactive setup did not save the explicit provider configuration");
+  }
+  if (!fs.existsSync(path.join(setupConfigRoot, "config.json"))) {
+    throw new Error("packaged non-interactive setup did not create config.json");
+  }
 
   run(npxCommand, [
     "--yes",
