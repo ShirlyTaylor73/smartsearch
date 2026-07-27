@@ -1,12 +1,14 @@
 import argparse
 import asyncio
 import json
+import os
 import sys
 from importlib import metadata
 from pathlib import Path
 from typing import Any
 
 from . import service
+from .prompts import InteractivePromptError, prompt_ui
 from .skill_installer import (
     SKILL_NAME,
     SKILL_TARGETS,
@@ -267,14 +269,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _setup_values(args: argparse.Namespace) -> dict[str, str]:
-    transport = args.grok_transport
-    if not transport and not args.non_interactive:
-        transport = input("Grok transport [openai-compatible/xai-responses]: ").strip() or "openai-compatible"
-    if not transport:
-        transport = service.config.grok_transport
-    mapping = {
-        "SMART_SEARCH_GROK_TRANSPORT": transport,
+def _setup_argument_values(args: argparse.Namespace) -> dict[str, str]:
+    return {
+        "SMART_SEARCH_GROK_TRANSPORT": args.grok_transport,
         "XAI_API_URL": args.xai_api_url,
         "XAI_API_KEY": args.xai_api_key,
         "XAI_MODEL": args.xai_model,
@@ -293,28 +290,83 @@ def _setup_values(args: argparse.Namespace) -> dict[str, str]:
         "FIRECRAWL_API_KEY": args.firecrawl_api_key,
         "FIRECRAWL_API_URL": args.firecrawl_api_url,
     }
-    if not args.non_interactive:
-        required = ["XAI_API_KEY"] if transport == "xai-responses" else ["OPENAI_COMPATIBLE_API_URL", "OPENAI_COMPATIBLE_API_KEY", "OPENAI_COMPATIBLE_MODEL"]
-        required += ["EXA_API_KEY", "CONTEXT7_API_KEY", "ZHIPU_MCP_API_KEY", "FIRECRAWL_API_KEY"]
-        for key in required:
-            if not mapping.get(key):
-                mapping[key] = input(f"{key}: ").strip()
-    return {key: value for key, value in mapping.items() if value != ""}
 
 
-def _prompt(message: str) -> str:
-    try:
-        return input(message).strip()
-    except EOFError as exc:
-        raise SkillInstallError("Interactive skill selection requires a terminal; use --project/--global and --agent") from exc
+def _setup_required_keys(transport: str) -> list[str]:
+    grok = ["XAI_API_KEY"] if transport == "xai-responses" else [
+        "OPENAI_COMPATIBLE_API_URL",
+        "OPENAI_COMPATIBLE_API_KEY",
+        "OPENAI_COMPATIBLE_MODEL",
+    ]
+    return grok + ["EXA_API_KEY", "CONTEXT7_API_KEY", "ZHIPU_MCP_API_KEY", "FIRECRAWL_API_KEY"]
 
 
-def _prompt_yes_no(message: str, *, default: bool = False) -> bool:
-    suffix = " [Y/n]: " if default else " [y/N]: "
-    value = _prompt(message + suffix).lower()
+def _is_secret_key(key: str) -> bool:
+    return key.endswith("_API_KEY")
+
+
+def _masked_value(key: str, value: str) -> str:
     if not value:
-        return default
-    return value in {"y", "yes", "是", "好"}
+        return "(missing)"
+    if not _is_secret_key(key):
+        return value
+    return "****" + value[-4:] if len(value) > 4 else "****"
+
+
+def _current_setup_value(key: str, saved: dict[str, str]) -> tuple[str, str]:
+    source = service.config.get_config_source(key)
+    if source == "environment":
+        return os.getenv(key, ""), source
+    return saved.get(key, ""), source
+
+
+def _setup_values(args: argparse.Namespace) -> tuple[dict[str, str], str]:
+    explicit = _setup_argument_values(args)
+    if args.non_interactive:
+        transport = explicit["SMART_SEARCH_GROK_TRANSPORT"] or service.config.grok_transport
+        explicit["SMART_SEARCH_GROK_TRANSPORT"] = transport
+        return {key: value for key, value in explicit.items() if value != ""}, transport
+
+    prompt_ui.require_tty(
+        "Interactive setup requires a terminal; use --non-interactive with explicit provider options"
+    )
+    saved = service.config.get_saved_config(masked=False)
+    current_transport = explicit["SMART_SEARCH_GROK_TRANSPORT"] or service.config.grok_transport
+    transport = explicit["SMART_SEARCH_GROK_TRANSPORT"] or prompt_ui.select(
+        "Grok transport",
+        [
+            {"name": "OpenAI-compatible", "value": "openai-compatible"},
+            {"name": "xAI Responses", "value": "xai-responses"},
+        ],
+        default=current_transport,
+    )
+    explicit["SMART_SEARCH_GROK_TRANSPORT"] = str(transport)
+
+    for key in _setup_required_keys(str(transport)):
+        if explicit.get(key):
+            continue
+        current, source = _current_setup_value(key, saved)
+        if source == "environment" and current:
+            if not prompt_ui.confirm(
+                f"{key} is provided by the environment. Continue using it?",
+                default=True,
+            ):
+                raise InteractivePromptError(
+                    f"{key} is managed by the environment; change or unset that environment variable before rerunning setup"
+                )
+            continue
+        if current and prompt_ui.confirm(
+            f"Keep current {key} ({_masked_value(key, current)})?",
+            default=True,
+        ):
+            continue
+        value = (
+            prompt_ui.secret(key, required=True)
+            if _is_secret_key(key)
+            else prompt_ui.text(key, default=current, required=True)
+        )
+        explicit[key] = value
+    return {key: value for key, value in explicit.items() if value != ""}, str(transport)
 
 
 def _skill_scope(args: argparse.Namespace, *, non_interactive: bool = False) -> str:
@@ -324,12 +376,17 @@ def _skill_scope(args: argparse.Namespace, *, non_interactive: bool = False) -> 
         return "project"
     if non_interactive or getattr(args, "yes", False):
         return "project"
-    value = _prompt("Skill scope [project/global] (project): ").lower()
-    if value in {"", "project", "p"}:
-        return "project"
-    if value in {"global", "g"}:
-        return "global"
-    raise SkillInstallError("Skill scope must be project or global")
+    prompt_ui.require_tty(
+        "Interactive skill selection requires a terminal; use --project/--global, --agent and --yes"
+    )
+    return str(prompt_ui.select(
+        "Skill scope",
+        [
+            {"name": "Project - current working directory", "value": "project"},
+            {"name": "Global - current user", "value": "global"},
+        ],
+        default="project",
+    ))
 
 
 def _skill_targets(args: argparse.Namespace, scope: str, *, non_interactive: bool = False) -> list[str]:
@@ -345,63 +402,82 @@ def _skill_targets(args: argparse.Namespace, scope: str, *, non_interactive: boo
             return detected
         raise SkillInstallError("No Agent was detected; specify --agent or --all-agents")
 
-    candidates = [target for target in SKILL_TARGETS if target.target_id in detected] or [
-        target for target in SKILL_TARGETS if scope == "project" or target.global_root is not None
+    prompt_ui.require_tty(
+        "Interactive skill selection requires a terminal; use --project/--global, --agent and --yes"
+    )
+    candidates = [target for target in SKILL_TARGETS if scope == "project" or target.global_root is not None]
+    choices = [
+        {
+            "name": f"{target.label} (detected)" if target.target_id in detected else target.label,
+            "value": target.target_id,
+        }
+        for target in candidates
     ]
-    print("Available Agent targets:")
-    for index, target in enumerate(candidates, start=1):
-        marker = " (detected)" if target.target_id in detected else ""
-        print(f"  {index}. {target.target_id} - {target.label}{marker}")
-    default = ",".join(target.target_id for target in candidates if target.target_id in detected)
-    prompt = "Select Agent numbers or names separated by commas"
-    if default:
-        prompt += f" [{default}]"
-    raw = _prompt(prompt + ": ") or default
-    if not raw:
-        return []
-    selected: list[str] = []
-    names: list[str] = []
-    for token in raw.replace(";", ",").split(","):
-        value = token.strip()
-        if value.isdigit() and 1 <= int(value) <= len(candidates):
-            selected.append(candidates[int(value) - 1].target_id)
-        elif value:
-            names.append(value)
-    selected.extend(parse_skill_targets(names))
-    return list(dict.fromkeys(selected))
+    return list(prompt_ui.checkbox(
+        "Agent targets",
+        choices,
+        enabled=[target.target_id for target in candidates if target.target_id in detected],
+        required=True,
+    ))
 
 
 def _show_skill_preview(scope: str, targets: list[str], skill_name: str) -> None:
-    print(f"Canonical: {canonical_skill_path(skill_name, scope=scope)}")
+    print(f"Canonical: {canonical_skill_path(skill_name, scope=scope)}", file=sys.stderr)
     for target_id in targets:
-        print(f"  {target_id}: {skill_target_path(target_id, scope, skill_name=skill_name)}")
+        print(f"  {target_id}: {skill_target_path(target_id, scope, skill_name=skill_name)}", file=sys.stderr)
 
 
-def _skill_copy_mode(args: argparse.Namespace, *, non_interactive: bool = False) -> bool:
+def _skill_copy_mode(
+    args: argparse.Namespace,
+    scope: str,
+    targets: list[str],
+    *,
+    non_interactive: bool = False,
+) -> bool:
     if getattr(args, "copy", False):
         return True
     if non_interactive or getattr(args, "yes", False):
         return False
-    value = _prompt("Installation method [symlink/copy] (symlink): ").lower()
-    if value in {"", "symlink", "link", "s"}:
+    canonical = canonical_skill_path(SKILL_NAME, scope=scope)
+    if targets and all(skill_target_path(target, scope) == canonical for target in targets):
         return False
-    if value in {"copy", "c"}:
-        return True
-    raise SkillInstallError("Installation method must be symlink or copy")
+    prompt_ui.require_tty(
+        "Interactive skill selection requires a terminal; use --copy or --yes"
+    )
+    return prompt_ui.select(
+        "Installation method",
+        [
+            {"name": "Symlink (Recommended) - single source of truth", "value": "symlink"},
+            {"name": "Copy - independent copies", "value": "copy"},
+        ],
+        default="symlink",
+    ) == "copy"
+
+
+def _skill_scope_from_args(args: argparse.Namespace, *, non_interactive: bool = False) -> str:
+    selected = getattr(args, "_selected_skill_scope", "")
+    if selected:
+        return selected
+    scope = _skill_scope(args, non_interactive=non_interactive)
+    args._selected_skill_scope = scope
+    return scope
 
 
 def _run_skill_command(args: argparse.Namespace) -> dict[str, Any]:
     names = parse_skill_names(args.name)
-    scope = _skill_scope(args)
+    scope = _skill_scope_from_args(args)
     targets = _skill_targets(args, scope)
     if not targets:
         raise SkillInstallError("No Agent target selected")
-    copy_mode = _skill_copy_mode(args) if args.skills_command == "install" else False
+    copy_mode = _skill_copy_mode(args, scope, targets) if args.skills_command == "install" else False
     mutating = args.skills_command in {"install", "uninstall", "update"}
     if mutating and not args.yes:
+        prompt_ui.require_tty(
+            "Interactive skill confirmation requires a terminal; pass --yes after reviewing --project/--global and --agent"
+        )
         for skill_name in names:
             _show_skill_preview(scope, targets, skill_name)
-        if not _prompt_yes_no(f"Continue with skills {args.skills_command}?"):
+        if not prompt_ui.confirm(f"Continue with skills {args.skills_command}?", default=False):
             return {"ok": True, "cancelled": True, "operation": args.skills_command}
 
     results: list[dict[str, Any]] = []
@@ -421,22 +497,70 @@ def _run_skill_command(args: argparse.Namespace) -> dict[str, Any]:
     return {"ok": all(result.get("ok") for result in results), "operation": args.skills_command, "results": results}
 
 
-def _setup_skill_install(args: argparse.Namespace) -> dict[str, Any] | None:
+def _setup_skill_plan(args: argparse.Namespace) -> dict[str, Any] | None:
     explicit_targets = bool(args.agents or args.all_agents)
     if args.non_interactive and not explicit_targets:
         return None
-    if not args.non_interactive and not explicit_targets and not _prompt_yes_no("Install the bundled Agent skill?"):
+    if not args.non_interactive and not explicit_targets and not prompt_ui.confirm("Install the bundled Agent skill?", default=False):
         return None
-    scope = _skill_scope(args, non_interactive=args.non_interactive)
+    scope = _skill_scope_from_args(args, non_interactive=args.non_interactive)
     targets = _skill_targets(args, scope, non_interactive=args.non_interactive)
     if not targets:
-        return {"ok": True, "cancelled": True, "operation": "install"}
-    copy_mode = _skill_copy_mode(args, non_interactive=args.non_interactive)
+        return None
+    copy_mode = _skill_copy_mode(args, scope, targets, non_interactive=args.non_interactive)
+    return {"scope": scope, "targets": targets, "copy": copy_mode}
+
+
+def _show_setup_preview(values: dict[str, str], transport: str, skill_plan: dict[str, Any] | None) -> None:
+    saved = service.config.get_saved_config(masked=False)
+    print("Configuration summary:", file=sys.stderr)
+    keys = list(dict.fromkeys(_setup_required_keys(transport) + sorted(values)))
+    for key in keys:
+        current, source = _current_setup_value(key, saved)
+        value = values.get(key, current)
+        if value:
+            value_source = "new" if key in values else source
+            print(f"  {key}: {_masked_value(key, value)} ({value_source})", file=sys.stderr)
+    if skill_plan:
+        print("Skill installation:", file=sys.stderr)
+        _show_skill_preview(skill_plan["scope"], skill_plan["targets"], SKILL_NAME)
+        print(f"  method: {'copy' if skill_plan['copy'] else 'symlink/direct'}", file=sys.stderr)
+
+
+def _run_setup(args: argparse.Namespace) -> dict[str, Any]:
+    values, transport = _setup_values(args)
+    skill_plan = _setup_skill_plan(args)
     if not args.non_interactive and not args.yes:
-        _show_skill_preview(scope, targets, SKILL_NAME)
-        if not _prompt_yes_no("Install skill to these Agent targets?"):
-            return {"ok": True, "cancelled": True, "operation": "install"}
-    return install_skill_targets(targets, scope=scope, copy=copy_mode)
+        _show_setup_preview(values, transport, skill_plan)
+        if not prompt_ui.confirm("Apply this setup?", default=False):
+            return {
+                "ok": True,
+                "cancelled": True,
+                "config_file": str(service.config.config_file),
+                "saved": [],
+                "errors": [],
+                "skill_install": None,
+            }
+
+    errors = []
+    for key, value in values.items():
+        result = service.config_set(key, value)
+        if not result.get("ok"):
+            errors.append(result.get("error", key))
+    skill_install = None
+    if not errors and skill_plan:
+        skill_install = install_skill_targets(
+            skill_plan["targets"],
+            scope=skill_plan["scope"],
+            copy=skill_plan["copy"],
+        )
+    return {
+        "ok": not errors and (skill_install is None or skill_install.get("ok", False)),
+        "config_file": str(service.config.config_file),
+        "saved": sorted(values),
+        "errors": errors,
+        "skill_install": skill_install,
+    }
 
 
 async def _run_async(args: argparse.Namespace) -> int:
@@ -463,21 +587,6 @@ async def _run_async(args: argparse.Namespace) -> int:
                 data = await service.fetch_extract(args.url, max_length=args.max_length, schema=schema, prompt=args.prompt, debug=args.debug)
     elif args.command == "map":
         data = await service.map_site_operation(args.url, search=args.search, sitemap=args.sitemap, include_subdomains=args.include_subdomains, ignore_query_parameters=args.ignore_query_parameters, ignore_cache=args.ignore_cache, limit=args.limit, timeout=args.timeout, location=args.location, debug=args.debug)
-    elif args.command == "setup":
-        values = _setup_values(args)
-        errors = []
-        for key, value in values.items():
-            result = service.config_set(key, value)
-            if not result.get("ok"):
-                errors.append(result.get("error", key))
-        skill_install = _setup_skill_install(args) if not errors else None
-        data = {
-            "ok": not errors and (skill_install is None or skill_install.get("ok", False)),
-            "config_file": str(service.config.config_file),
-            "saved": sorted(values),
-            "errors": errors,
-            "skill_install": skill_install,
-        }
     elif args.command == "doctor":
         data = await service.doctor()
     elif args.command == "diagnose":
@@ -500,11 +609,6 @@ async def _run_async(args: argparse.Namespace) -> int:
             data = service.config_set(args.key, args.value)
         else:
             data = service.config_unset(args.key)
-    elif args.command == "skills":
-        try:
-            data = _run_skill_command(args)
-        except SkillInstallError as exc:
-            data = {"ok": False, "error_type": "parameter_error", "error": str(exc)}
     else:
         data = await service.smoke("mock")
     return _print_result(data, args.format, args.output)
@@ -513,8 +617,12 @@ async def _run_async(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.command == "setup":
+            return _print_result(_run_setup(args), args.format, args.output)
+        if args.command == "skills":
+            return _print_result(_run_skill_command(args), args.format, args.output)
         return asyncio.run(_run_async(args))
-    except SkillInstallError as exc:
+    except (SkillInstallError, InteractivePromptError) as exc:
         return _print_result(
             {"ok": False, "error_type": "parameter_error", "error": str(exc)},
             getattr(args, "format", "json"),
