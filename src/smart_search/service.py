@@ -220,6 +220,13 @@ async def context7_docs(library_id: str, query: str) -> dict[str, Any]:
     return await _decode_provider_json(raw, "context7")
 
 
+async def context7_documentation_search(query: str) -> dict[str, Any]:
+    if not config.context7_api_key:
+        return {"ok": False, "error_type": "config_error", "error": "CONTEXT7_API_KEY is not configured"}
+    raw = await Context7Provider(config.context7_base_url, config.context7_api_key, config.context7_timeout).documentation_search(query)
+    return await _decode_provider_json(raw, "context7")
+
+
 def _zread_provider() -> ZhipuMCPProvider:
     return ZhipuMCPProvider(config.zhipu_mcp_zread_api_url, config.zhipu_mcp_api_key or "", config.zhipu_mcp_timeout, provider_id="zhipu-mcp-zread")
 
@@ -307,13 +314,17 @@ async def docs_resolve(name: str, query: str = "", *, debug: bool = False) -> di
         error_type, error = _operation_exception(exc)
         data = {"ok": False, "error_type": error_type, "error": error}
     candidates = [{"id": row.get("id", ""), "title": row.get("title") or row.get("name") or row.get("id", ""), "description": row.get("description", "")} for row in data.get("results") or []]
-    return _operation_envelope("docs", "resolve", ok=bool(data.get("ok")), start=start, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"candidates": candidates, "provider": "context7", "provider_operation": "library search"}, debug=debug)
+    return _operation_envelope("docs", "resolve", ok=bool(data.get("ok")), start=start, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"candidates": candidates, "provider": "context7", "provider_operation": "library search", **_context7_metadata(data)}, debug=debug)
+
+
+def _context7_metadata(data: dict[str, Any]) -> dict[str, Any]:
+    return {key: data[key] for key in ("version", "rules", "library_id", "redirected_from", "http_status", "provider_error_code") if key in data}
 
 
 async def docs_search(query: str, *, source: str = "", debug: bool = False) -> dict[str, Any]:
     start = time.time()
     repo_pattern = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-    context7_pattern = re.compile(r"^/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?$")
+    context7_pattern = re.compile(r"^/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:(?:/|@)[A-Za-z0-9_.+-]+)?$")
     if source and repo_pattern.fullmatch(source):
         if not config.zhipu_mcp_api_key:
             return _operation_envelope("docs", "search", ok=False, start=start, error_type="config_error", error="repository docs.search requires ZHIPU_MCP_API_KEY; run `smart-search diagnose docs search`", extra={"results": []})
@@ -330,20 +341,32 @@ async def docs_search(query: str, *, source: str = "", debug: bool = False) -> d
     if not config.context7_api_key:
         return _operation_envelope("docs", "search", ok=False, start=start, error_type="config_error", error="docs.search requires CONTEXT7_API_KEY; run `smart-search diagnose docs search`", extra={"results": []})
     library_id = source
-    if not library_id:
-        resolved = await context7_library(query, query)
-        if not resolved.get("ok"):
-            return _operation_envelope("docs", "search", ok=False, start=start, error_type=resolved.get("error_type", "provider_error"), error=resolved.get("error", "Context7 library resolution failed"), extra={"results": []})
-        library_id = next((row.get("id", "") for row in resolved.get("results", []) if row.get("id")), "")
-    data = await context7_docs(library_id, query) if library_id else {"ok": False, "error_type": "provider_error", "error": "Context7 library not resolved"}
+    try:
+        request = context7_docs(library_id, query) if library_id else context7_documentation_search(query)
+        data = await _await_operation(request, start=start, timeout=operation_policy("docs.search")["timeout"])
+    except Exception as exc:
+        error_type, error = _operation_exception(exc)
+        data = {"ok": False, "error_type": error_type, "error": error}
     results: list[dict[str, Any]] = []
     if data.get("ok"):
-        for index, row in enumerate(data.get("results") or [], 1):
-            text = row.get("content") or row.get("code") or row.get("description") or json.dumps(row, ensure_ascii=False)
-            results.append({"url": f"context7:{library_id}#{index}", "title": row.get("title") or library_id, "description": str(text)[:500], "snippet": str(text)[:500], "provider": "context7"})
-        if not results and data.get("content"):
-            results.append({"url": f"context7:{library_id}", "title": library_id, "description": data["content"][:500], "snippet": data["content"][:500], "provider": "context7"})
-    return _operation_envelope("docs", "search", ok=bool(data.get("ok")), start=start, content=data.get("content", ""), sources=results, error_type=data.get("error_type", ""), error=data.get("error", ""), extra={"results": results, "provider": "context7", "provider_operation": "context"}, debug=debug)
+        for row in data.get("results") or []:
+            url = row.get("codeId") or row.get("pageId")
+            if not url:
+                continue
+            text = row.get("codeDescription") or row.get("content") or ""
+            result = {
+                "url": url, "title": row.get("codeTitle") or row.get("breadcrumb") or row.get("pageTitle") or url,
+                "description": str(text)[:500], "snippet": str(text)[:500], "provider": "context7",
+            }
+            row_library = row.get("libraryId") or data.get("library_id")
+            if row_library:
+                result["library_id"] = row_library
+            results.append(result)
+    extra = {"results": results, "provider": "context7", "provider_operation": "context" if source else "search", **_context7_metadata(data)}
+    for key in ("code_snippets", "info_snippets"):
+        if key in data:
+            extra[key] = data[key]
+    return _operation_envelope("docs", "search", ok=bool(data.get("ok")), start=start, content=data.get("content", ""), sources=results, error_type=data.get("error_type", ""), error=data.get("error", ""), extra=extra, debug=debug)
 
 
 async def docs_tree(repo: str, *, path: str = "", debug: bool = False) -> dict[str, Any]:

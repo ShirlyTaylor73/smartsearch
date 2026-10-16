@@ -8,7 +8,7 @@ import httpx
 
 
 MCP_REQUESTED_PROTOCOL_VERSION = "2025-03-26"
-URL_PATTERN = r"https?://[^\s)>\]\"']+"
+URL_PATTERN = r"https?://[^\s)<>\]\"'\\]+"
 
 
 class MCPProtocolError(Exception):
@@ -72,6 +72,23 @@ def _extract_text(result: dict[str, Any]) -> str:
     return ""
 
 
+def _decode_content_text(text: str) -> tuple[str, str]:
+    """Return (decoded, raw), unwrapping only bounded JSON string envelopes."""
+    raw = text or ""
+    decoded: Any = raw.strip()
+    for _ in range(2):
+        if not isinstance(decoded, str):
+            break
+        try:
+            candidate = json.loads(decoded)
+        except json.JSONDecodeError:
+            break
+        if not isinstance(candidate, str):
+            break
+        decoded = candidate
+    return (decoded if isinstance(decoded, str) else raw).strip(), raw
+
+
 def _parse_sse_or_json(response: httpx.Response) -> dict[str, Any]:
     content_type = response.headers.get("content-type", "")
     if "json" in content_type:
@@ -92,9 +109,37 @@ def _parse_sse_or_json(response: httpx.Response) -> dict[str, Any]:
 
 
 def _parse_markdown_results(text: str, provider: str) -> list[dict[str, str]]:
+    # ZRead can leave literal newline escapes after the JSON string is decoded.
+    # Only the citation parser treats them as separators; file content stays intact.
+    lines = re.split(r"\r?\n|\\r\\n|\\n", text)
+    source_pattern = re.compile(rf"^\s*Source:\s*({URL_PATTERN})", re.IGNORECASE)
+    if any(source_pattern.match(line) for line in lines):
+        results = []
+        current = None
+        title = ""
+        in_excerpt = False
+        for line in lines:
+            marker = re.match(r"^\s*:?(?:\[(\d+)\]:|#{2,4}\s+(?:\d+[.)]\s*)?)(.+?)\s*$", line)
+            source = source_pattern.match(line) if not in_excerpt else None
+            if source:
+                if current:
+                    results.append(current)
+                url = source.group(1).rstrip(".,")
+                current = {"title": title or url, "url": url, "description": "", "provider": provider}
+            elif line.strip() == "<excerpt>":
+                in_excerpt = True
+            elif line.strip() == "</excerpt>":
+                in_excerpt = False
+            elif marker and not in_excerpt:
+                title = marker.group(2).strip()
+            elif current and in_excerpt and line.strip():
+                current["description"] = (current["description"] + " " + line.strip()).strip()
+        if current:
+            results.append(current)
+        return results
     results: list[dict[str, str]] = []
     current: dict[str, str] | None = None
-    for line in text.splitlines():
+    for line in lines:
         heading = re.match(r"^#{2,4}\s+(?:\d+[.)]\s*)?(.+?)\s*$", line.strip())
         if heading:
             if current:
@@ -255,7 +300,15 @@ class ZhipuMCPProvider:
             }
 
         result = data.get("result") or {}
-        text = _extract_text(result)
+        raw_text = _extract_text(result)
+        blocks = result.get("content")
+        if isinstance(blocks, list):
+            text = "\n".join(
+                _decode_content_text(item["text"])[0]
+                for item in blocks if isinstance(item, dict) and isinstance(item.get("text"), str)
+            ).strip()
+        else:
+            text, _ = _decode_content_text(raw_text)
         content_error = _content_error(text)
         is_error = bool(result.get("isError")) or bool(content_error)
         output: dict[str, Any] = {
@@ -263,7 +316,7 @@ class ZhipuMCPProvider:
             "provider": self.provider_id,
             "tool": name,
             "content": text,
-            "raw_content": text,
+            "raw_content": raw_text,
             "elapsed_ms": _elapsed_ms(start),
         }
         for key in ("query", "url", "repo_name", "dir_path", "file_path", "language"):

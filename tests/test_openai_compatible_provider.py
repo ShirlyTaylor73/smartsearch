@@ -1,7 +1,27 @@
 import httpx
 import pytest
 
-from smart_search.providers.openai_compatible import OpenAICompatibleSearchProvider, reset_openai_compatible_breakers
+from smart_search.providers.openai_compatible import OpenAICompatibleSearchProvider, reset_openai_compatible_breakers, _transport_error_message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [401, 426, 429])
+async def test_stream_http_error_body_is_read_before_raise(monkeypatch, status):
+    class ErrorStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'{"error":"provider requires upgrade"}'
+
+    client_type = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda request: httpx.Response(status, stream=ErrorStream()))
+    monkeypatch.setattr("smart_search.providers.openai_compatible.httpx.AsyncClient", lambda **kwargs: client_type(transport=transport, **kwargs))
+    monkeypatch.setenv("SMART_SEARCH_RETRY_MAX_ATTEMPTS", "0")
+    provider = OpenAICompatibleSearchProvider("https://api.example.com", "test-key", "test-model", stream=True)
+    with pytest.raises(httpx.HTTPStatusError) as caught:
+        await provider._execute_stream_with_retry({}, {"stream": True})
+    message = _transport_error_message(caught.value)
+    assert f"HTTP {status}" in message
+    assert "provider requires upgrade" in message
+    assert "without having called" not in message
 
 
 class DummyResponse:

@@ -19,12 +19,13 @@ Search technical documentation or repository knowledge.
 smart-search docs search QUERY [--source SOURCE] [COMMON_FLAGS]
 ```
 
-- `QUERY`: required documentation question.
-- `--source SOURCE`: documentation id beginning with `/`, or GitHub repository `owner/repo`.
+- `QUERY`: required documentation question. Include the product name when searching without `--source`; the service selects relevant documentation libraries automatically.
+- `--source SOURCE`: documentation id beginning with `/`, or GitHub repository `owner/repo`. Documentation ids can include a version as `/owner/library/version` or `/owner/library@version`.
 
-For stable library documentation, resolve the id first:
+Search directly, or resolve an id when you need to choose a specific documentation source:
 
 ```bash
+smart-search docs search "FastAPI dependency injection Depends example"
 smart-search docs resolve fastapi "dependency injection"
 smart-search docs search "How are yield dependencies cleaned up?" --source /fastapi/fastapi
 ```

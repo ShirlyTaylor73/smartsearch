@@ -60,8 +60,9 @@ Python 源码位于 `src/smart_search/`；npm 包只是跨平台启动包装器�
 |---|---|
 | `search answer QUERY` | Grok；由 `SMART_SEARCH_GROK_TRANSPORT` 选择 xAI Responses 或 OpenAI-compatible |
 | `search sources QUERY` | Exa Search `/search` |
-| `docs resolve NAME [QUERY]` | Context7 library search |
-| 普通 `docs search QUERY` | Context7 context lookup |
+| `docs resolve NAME [QUERY]` | Context7 `/api/v2/libs/search` |
+| 普通 `docs search QUERY` | Context7 `/api/v3/search`，自动选择文档库 |
+| `docs search QUERY --source /owner/library` | Context7 `/api/v2/context`，指定文档库 |
 | `docs search QUERY --source owner/repo` | Zhipu MCP ZRead `search_doc` |
 | `docs tree REPO [--path PATH]` | ZRead `get_repo_structure` |
 | `docs read REPO PATH` | ZRead `read_file` |
@@ -83,6 +84,8 @@ smart-search map site https://docs.example.com --search authentication --sitemap
 ```
 
 `fetch extract` 至少需要 `--prompt` 或 `--schema` 之一，也可以同时提供。仅使用 prompt 时由 Firecrawl 推断输出结构，schema 用于约束结构。
+
+文档问题可直接通过 `docs search QUERY` 查询，在问题中写明产品名称。需要指定文档来源时，先运行 `docs resolve NAME [QUERY]` 选择 ID。Context7 ID 同时支持 `/owner/library/version` 和 `/owner/library@version`。文档结果提供原始来源 URL 和可读正文；Context7 返回版本信息时会一并保留。
 
 `map site` 默认使用 `sitemap=include`、包含子域名、忽略 query 参数、不忽略缓存、`limit=5000`。`--timeout` 单位为秒，内部转换为 Firecrawl 的毫秒；`--location` 接受 `{"country":"US","languages":["en-US"]}`。
 

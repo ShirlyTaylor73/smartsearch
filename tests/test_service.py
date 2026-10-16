@@ -56,12 +56,67 @@ async def test_context7_docs_search_normalizes_results(monkeypatch):
     monkeypatch.setenv("CONTEXT7_API_KEY", "secret")
 
     async def fake_docs(library_id, query):
-        return {"ok": True, "results": [{"title": "Hooks", "content": "Use hooks"}], "content": "raw"}
+        return {"ok": True, "results": [{"pageId": "https://react.dev/reference/react/hooks", "breadcrumb": "Hooks", "content": "Use hooks"}], "content": "raw"}
 
     monkeypatch.setattr(service, "context7_docs", fake_docs)
     result = await service.docs_search("hooks", source="/facebook/react")
     assert result["ok"] is True
-    assert result["results"][0]["url"].startswith("context7:")
+    assert result["results"][0]["url"] == "https://react.dev/reference/react/hooks"
+
+
+@pytest.mark.asyncio
+async def test_context7_docs_search_without_source_uses_v3_results(monkeypatch):
+    monkeypatch.setenv("CONTEXT7_API_KEY", "secret")
+
+    async def fake_search(query):
+        return {
+            "ok": True,
+            "content": "raw",
+            "version": {"status": "unverified"},
+            "results": [
+                {"codeId": "https://fastapi.tiangolo.com/reference/dependencies", "codeTitle": "Depends", "pageTitle": "Dependencies", "codeDescription": "dependency", "libraryId": "/websites/fastapi_tiangolo"},
+                {"pageId": "https://fastapi.tiangolo.com/tutorial/dependencies", "breadcrumb": "Dependencies", "content": "guide"},
+            ],
+        }
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("legacy library resolution called")
+
+    monkeypatch.setattr(service, "context7_documentation_search", fake_search)
+    monkeypatch.setattr(service, "context7_library", forbidden)
+    result = await service.docs_search("FastAPI dependency injection")
+    assert result["ok"] is True
+    assert result["version"] == {"status": "unverified"}
+    assert result["results"][0]["library_id"] == "/websites/fastapi_tiangolo"
+    assert [row["url"] for row in result["results"]] == [
+        "https://fastapi.tiangolo.com/reference/dependencies",
+        "https://fastapi.tiangolo.com/tutorial/dependencies",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["/vercel/next.js@15", "/vercel/next.js/v15.1.11"])
+async def test_context7_versioned_source_is_forwarded(monkeypatch, source):
+    monkeypatch.setenv("CONTEXT7_API_KEY", "secret")
+    async def fake_docs(library_id, query):
+        assert library_id == source
+        return {"ok": True, "results": [], "content": ""}
+    monkeypatch.setattr(service, "context7_docs", fake_docs)
+    assert (await service.docs_search("routing", source=source))["ok"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["", "/owner/repo"])
+async def test_context7_error_metadata_reaches_cli_envelope(monkeypatch, source):
+    monkeypatch.setenv("CONTEXT7_API_KEY", "secret")
+    async def fail(*args):
+        return {"ok": False, "error_type": "rate_limited", "error": "HTTP 429: limited", "http_status": 429, "provider_error_code": "rate_limit_exceeded"}
+    monkeypatch.setattr(service, "context7_documentation_search", fail)
+    monkeypatch.setattr(service, "context7_docs", fail)
+    result = await service.docs_search("q", source=source)
+    assert result["http_status"] == 429
+    assert result["provider_error_code"] == "rate_limit_exceeded"
+    assert result["error_type"] == "rate_limited"
 
 
 @pytest.mark.asyncio

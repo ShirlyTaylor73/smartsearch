@@ -376,6 +376,8 @@ class OpenAICompatibleSearchProvider(BaseSearchProvider):
                         headers=headers,
                         json=payload,
                     ) as response:
+                        if not response.is_success:
+                            await response.aread()
                         response.raise_for_status()
                         return await self._parse_streaming_response(response, ctx)
 

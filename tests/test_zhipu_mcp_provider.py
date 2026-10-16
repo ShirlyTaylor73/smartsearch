@@ -169,3 +169,57 @@ def test_zread_result_urls_exclude_json_string_quotes():
             "provider": "zhipu-mcp-zread",
         }
     ]
+
+
+def test_zread_decodes_json_wrapped_markdown_and_cleans_source_url():
+    provider = ZhipuMCPProvider("https://open.bigmodel.cn/api/mcp/zread/mcp", "secret", provider_id="zhipu-mcp-zread")
+    output = provider._normalize_response(
+        "search_doc",
+        {"repo_name": "owner/repo", "query": "install"},
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": {
+                "content": [{
+                    "type": "text",
+                    "text": json.dumps("## 1. Install\nSource: https://zread.ai/owner/repo/1-overview\\n<excerpt>Use the installer.</excerpt>"),
+                }]
+            },
+        },
+        0,
+    )
+    assert output["ok"] is True
+    assert output["raw_content"].startswith('"## 1. Install')
+    assert output["content"].startswith("## 1. Install")
+    assert output["results"][0]["url"] == "https://zread.ai/owner/repo/1-overview"
+
+
+def test_zread_live_style_source_blocks_preserve_all_citations():
+    text = r"Search results for owner/repo\n\n:[1]: Overview\nSource: https://zread.ai/owner/repo/1-overview\n<excerpt>\n## Internal heading\nSee https://example.com/incidental\n</excerpt>\n\n[2]: Installation\nSource: https://zread.ai/owner/repo/2-install\n<excerpt>\nInstall skills\n</excerpt>"
+    results = _parse_markdown_results(text, "zhipu-mcp-zread")
+    assert [(row["title"], row["url"]) for row in results] == [
+        ("Overview", "https://zread.ai/owner/repo/1-overview"),
+        ("Installation", "https://zread.ai/owner/repo/2-install"),
+    ]
+    assert "Internal heading" in results[0]["description"]
+
+
+def test_zread_decodes_each_mcp_text_block_separately():
+    provider = ZhipuMCPProvider("https://example.com/mcp", "secret")
+    result = provider._normalize_response("search_doc", {}, {"result": {"content": [
+        {"type": "text", "text": json.dumps("## First\nSource: https://example.com/1")},
+        {"type": "text", "text": json.dumps("## Second\nSource: https://example.com/2")},
+    ]}}, 0)
+    assert [row["url"] for row in result["results"]] == ["https://example.com/1", "https://example.com/2"]
+
+
+@pytest.mark.parametrize("depth", [0, 1, 2])
+def test_zread_keeps_file_escapes_and_unicode_intact(depth):
+    source = 'print("你好\\nworld")\npath = "C:\\new\\test"'
+    raw = source
+    for _ in range(depth):
+        raw = json.dumps(raw)
+    provider = ZhipuMCPProvider("https://example.com/mcp", "secret")
+    result = provider._normalize_response("read_file", {}, {"result": {"content": [{"type": "text", "text": raw}]}}, 0)
+    assert result["content"] == source
+    assert result["raw_content"] == raw

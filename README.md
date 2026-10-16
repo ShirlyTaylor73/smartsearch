@@ -60,8 +60,9 @@ The CLI source is Python under `src/smart_search/`. The npm package is a cross-p
 |---|---|
 | `search answer QUERY` | Grok via the configured xAI Responses or OpenAI-compatible transport |
 | `search sources QUERY` | Exa Search `/search` |
-| `docs resolve NAME [QUERY]` | Context7 library search |
-| plain `docs search QUERY` | Context7 context lookup |
+| `docs resolve NAME [QUERY]` | Context7 `/api/v2/libs/search` |
+| plain `docs search QUERY` | Context7 `/api/v3/search`, automatic library selection |
+| `docs search QUERY --source /owner/library` | Context7 `/api/v2/context`, explicit library |
 | `docs search QUERY --source owner/repo` | Zhipu MCP ZRead `search_doc` |
 | `docs tree REPO [--path PATH]` | ZRead `get_repo_structure` |
 | `docs read REPO PATH` | ZRead `read_file` |
@@ -83,6 +84,8 @@ smart-search map site https://docs.example.com --search authentication --sitemap
 ```
 
 `fetch extract` requires at least one of `--prompt` or `--schema`; both may be combined. Prompt-only extraction lets Firecrawl infer the output structure, while a schema constrains it.
+
+For documentation questions, include the product name in `docs search QUERY` to search directly. Use `docs resolve NAME [QUERY]` when you want to choose an explicit documentation source. Context7 IDs also accept `/owner/library/version` and `/owner/library@version`. Documentation results include original source URLs and readable content; returned version metadata is preserved when supplied by Context7.
 
 Firecrawl Map defaults are `sitemap=include`, include subdomains, ignore query parameters, use cache, and `limit=5000`. CLI timeout values are seconds and are converted to milliseconds. `--location` accepts JSON such as `{"country":"US","languages":["en-US"]}`.
 

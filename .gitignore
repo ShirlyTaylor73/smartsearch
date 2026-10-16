@@ -8,6 +8,8 @@ build/
 .venv/
 .smart-search-python/
 .env
+/config.json
+.DS_Store
 .smart-search/
 logs/
 .pytest_cache/
