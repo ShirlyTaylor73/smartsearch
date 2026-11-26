@@ -284,7 +284,18 @@ def _same_path(left: Path, right: Path) -> bool:
 
 
 def _same_location(left: Path, right: Path) -> bool:
-    return os.path.normcase(os.path.abspath(left)) == os.path.normcase(os.path.abspath(right))
+    """Whether both paths name one directory entry, so removing one removes the other.
+
+    Parent directories are resolved (an agent's skills directory may itself be a
+    link), but the last component is not: a link pointing at the canonical copy is
+    a separate entry that is safe to replace.
+    """
+
+    def entry(path: Path) -> str:
+        absolute = Path(os.path.abspath(path))
+        return os.path.normcase(str(absolute.parent.resolve(strict=False) / absolute.name))
+
+    return entry(left) == entry(right)
 
 
 def _create_windows_junction(target: Path, link_path: Path) -> bool:
@@ -596,7 +607,10 @@ def update_skill_targets(
         try:
             mode = record.get("mode", "copy")
             fallback_to_copy = False
-            if mode == "direct":
+            if _same_location(destination, canonical):
+                # Also repairs records written before aliased parents were recognized.
+                mode = record["mode"] = "direct"
+            elif mode == "direct":
                 pass
             elif mode == "copy":
                 _copy_directory(canonical, destination)

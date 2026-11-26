@@ -265,3 +265,80 @@ def test_noninteractive_setup_installs_only_with_explicit_agent(monkeypatch, tmp
     with_target = json.loads(capsys.readouterr().out)
     assert with_target["skill_install"]["ok"] is True
     assert (project / ".agents/skills/smart-search-cli").is_dir()
+
+
+def _aliased_project(tmp_path: Path, *, reverse: bool = False) -> Path:
+    """One agent skills directory is a symlink to the canonical one (or the other way round)."""
+    project = tmp_path / "project"
+    shared, alias = project / ".agents/skills", project / ".claude/skills"
+    if reverse:
+        shared, alias = alias, shared
+    shared.mkdir(parents=True)
+    alias.parent.mkdir(parents=True)
+    alias.symlink_to(shared, target_is_directory=True)
+    return project
+
+
+def _assert_intact(directory: Path) -> None:
+    assert directory.is_dir()
+    assert not directory.is_symlink()
+    assert (directory / "SKILL.md").is_file()
+    assert (directory / "references" / "search.md").read_text(encoding="utf-8") == "search"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink assertion")
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("copy", [False, True])
+@pytest.mark.parametrize("targets", [["claude"], ["codex", "claude"], ["claude", "codex"]])
+def test_install_through_aliased_parent_keeps_canonical(tmp_path, reverse, copy, targets):
+    project = _aliased_project(tmp_path, reverse=reverse)
+    canonical = project / ".agents/skills/smart-search-cli"
+
+    result = skill_installer.install_skill_targets(
+        targets, scope="project", project_root=project, source_root=_source(tmp_path), copy=copy
+    )
+
+    assert result["ok"] is True
+    assert {item["mode"] for item in result["installed"]} == {"direct"}
+    _assert_intact(project / ".claude/skills/smart-search-cli")
+    assert canonical.resolve().is_dir()
+    assert (canonical / "SKILL.md").is_file()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink assertion")
+@pytest.mark.parametrize("stale_mode", ["copy", "symlink"])
+def test_update_repairs_stale_record_for_aliased_target(tmp_path, stale_mode):
+    project = _aliased_project(tmp_path)
+    source = _source(tmp_path)
+    skill_installer.install_skill_targets(["codex", "claude"], scope="project", project_root=project, source_root=source)
+    manifest_path = skill_installer._manifest_path(project)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["skills"]["smart-search-cli"]["targets"]["claude"]["mode"] = stale_mode
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = skill_installer.update_skill_targets(["claude"], scope="project", project_root=project, source_root=source)
+
+    assert result["ok"] is True
+    assert result["updated"][0]["mode"] == "direct"
+    _assert_intact(project / ".agents/skills/smart-search-cli")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["skills"]["smart-search-cli"]["targets"]["claude"]["mode"] == "direct"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink assertion")
+@pytest.mark.parametrize("first,second", [("claude", "codex"), ("codex", "claude")])
+def test_uninstall_through_alias_waits_for_last_target(tmp_path, first, second):
+    project = _aliased_project(tmp_path)
+    canonical = project / ".agents/skills/smart-search-cli"
+    skill_installer.install_skill_targets(["codex", "claude"], scope="project", project_root=project, source_root=_source(tmp_path))
+
+    result = skill_installer.uninstall_skill_targets([first], scope="project", project_root=project)
+
+    assert result["canonical_removed"] is False
+    _assert_intact(canonical)
+
+    result = skill_installer.uninstall_skill_targets([second], scope="project", project_root=project)
+
+    assert result["canonical_removed"] is True
+    assert not canonical.exists()
+    assert (project / ".claude/skills").is_symlink()
