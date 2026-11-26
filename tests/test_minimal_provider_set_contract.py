@@ -7,13 +7,6 @@ from smart_search import cli, service
 from smart_search.config import Config
 
 
-def _fresh_config(monkeypatch):
-    config = Config()
-    monkeypatch.setattr(config, "_config_file", None)
-    monkeypatch.setattr(config, "_config_dir_source", None)
-    return config
-
-
 def test_search_parser_only_exposes_answer_and_sources():
     parser = cli.build_parser()
     assert parser.parse_args(["search", "answer", "q"]).operation == "answer"
@@ -97,7 +90,7 @@ def test_legacy_provider_commands_are_removed():
 
 def test_config_uses_fixed_provider_keys(monkeypatch):
     monkeypatch.delenv("EXA_SEARCH_TYPE", raising=False)
-    config = _fresh_config(monkeypatch)
+    config = Config()
     assert config.parse_search_answer_tools() == ["web_search"]
     assert config.exa_search_type == "auto"
     info = config.get_config_info()
@@ -121,7 +114,7 @@ def test_config_uses_fixed_provider_keys(monkeypatch):
 @pytest.mark.parametrize("value", ["neural", "keyword", "bogus"])
 def test_invalid_exa_search_type_is_rejected(monkeypatch, value):
     monkeypatch.setenv("EXA_SEARCH_TYPE", value)
-    config = _fresh_config(monkeypatch)
+    config = Config()
     with pytest.raises(ValueError, match="EXA_SEARCH_TYPE"):
         _ = config.exa_search_type
 
@@ -131,7 +124,7 @@ def test_operation_timeouts_only_accept_known_operations(monkeypatch):
         "SMART_SEARCH_OPERATION_TIMEOUTS",
         '{"search.sources":12,"docs.tree":30}',
     )
-    config = _fresh_config(monkeypatch)
+    config = Config()
     assert config.operation_timeouts == {"search.sources": 12.0, "docs.tree": 30.0}
 
     monkeypatch.setenv("SMART_SEARCH_OPERATION_TIMEOUTS", '{"search.similar":12}')
@@ -302,6 +295,6 @@ def test_map_limit_contract():
     assert service.validate_firecrawl_map_limit(100000) == 100000
 
 
-def test_config_info_remains_json_serializable(monkeypatch):
-    info = _fresh_config(monkeypatch).get_config_info()
+def test_config_info_remains_json_serializable():
+    info = Config().get_config_info()
     json.dumps(info)
