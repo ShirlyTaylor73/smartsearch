@@ -169,7 +169,11 @@ def test_model_has_no_implicit_default():
 
 
 def _isolated_setup(monkeypatch, prompt):
+    async def fake_probe():
+        return {"current_tools": "web_search", "results": {}, "suggested_tools": None, "skipped": "test"}
+
     monkeypatch.setattr(cli, "prompt_ui", prompt)
+    monkeypatch.setattr(service, "probe_search_tools", fake_probe)
 
 
 @pytest.mark.parametrize(

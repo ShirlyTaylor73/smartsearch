@@ -38,6 +38,13 @@ PROVIDER_PROFILES: dict[str, dict[str, Any]] = {
 }
 
 
+SEARCH_TOOL_PROBE_TIMEOUT = 60.0
+SEARCH_TOOL_PROBE_QUESTIONS = {
+    "web_search": "What is the latest stable Python release? Give the official source link.",
+    "x_search": "What is the most recent post from the official @ThePSF account on X? Give the post link.",
+}
+
+
 def _elapsed_ms(start: float) -> float:
     return round((time.time() - start) * 1000, 2)
 
@@ -271,6 +278,68 @@ async def search_answer(query: str, *, timeout_seconds: float | None = None, deb
         if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in {404, 405}:
             error = f"{error} (the endpoint may not support POST /responses)"
         return _operation_envelope("search", "answer", ok=False, start=start, error_type=error_type, error=error, extra=extra, debug=debug)
+
+
+async def _probe_search_tool(tool: str) -> dict[str, Any]:
+    """One real request with a single tool. Only tool-call evidence proves support."""
+    start = time.time()
+    provider = ResponsesSearchProvider(
+        config.search_answer_api_url or "",
+        config.search_answer_api_key or "",
+        config.search_answer_model or "",
+        [tool],
+        timeout=SEARCH_TOOL_PROBE_TIMEOUT,
+        max_retries=0,
+    )
+    failure: BaseException | None = None
+    try:
+        await asyncio.wait_for(provider.search(SEARCH_TOOL_PROBE_QUESTIONS[tool]), timeout=SEARCH_TOOL_PROBE_TIMEOUT)
+    except Exception as exc:
+        failure = exc
+
+    completed = (
+        provider.diagnostics.get("last_event_type") == "response.completed"
+        and provider.diagnostics.get("response_status", "completed") == "completed"
+    ) or failure is None
+    status, reason, error_type = "unknown", "", ""
+    if completed and provider.tool_was_called(tool):
+        status, reason = "supported", "the request completed and reported a tool call"
+    elif completed:
+        reason = "the request completed but reported no tool call"
+    else:
+        error_type, reason = _operation_exception(failure)
+        if isinstance(failure, httpx.HTTPStatusError) and failure.response.status_code in {400, 422} and tool in failure.response.text:
+            status = "unsupported"
+    return {
+        "status": status,
+        "reason": reason,
+        "error_type": error_type,
+        "request_failed": not completed,
+        "elapsed_ms": _elapsed_ms(start),
+    }
+
+
+async def probe_search_tools() -> dict[str, Any]:
+    """Check which search tools the configured URL, key and model can actually run. Never writes config."""
+    result: dict[str, Any] = {"current_tools": config.search_answer_tools_raw, "results": {}, "suggested_tools": None}
+    missing = config.search_answer_missing_config()
+    if missing:
+        result["skipped"] = f"missing {', '.join(missing)}"
+        return result
+
+    web = await _probe_search_tool("web_search")
+    result["results"]["web_search"] = web
+    if web["request_failed"]:
+        x = {"status": "unknown", "reason": "skipped because the web_search request failed", "error_type": "", "request_failed": False, "elapsed_ms": 0.0}
+    else:
+        x = await _probe_search_tool("x_search")
+    result["results"]["x_search"] = x
+
+    if web["status"] == "supported" and x["status"] == "supported":
+        result["suggested_tools"] = "web_search,x_search"
+    elif web["status"] == "supported" and x["status"] == "unsupported":
+        result["suggested_tools"] = "web_search"
+    return result
 
 
 async def search_sources(
@@ -557,7 +626,27 @@ async def diagnose_provider(provider: str, *, live: bool = False, timeout_second
     return {"ok": configured, "provider": provider, "operations": operations, "configured": configured, "live_checked": False, "note": "Use operation smoke commands for real requests." if not live else "Live provider diagnosis is performed through operation smoke tests.", "timeout_seconds": timeout_seconds}
 
 
-async def doctor() -> dict[str, Any]:
+def _apply_tool_probe(info: dict[str, Any], probe: dict[str, Any]) -> None:
+    info["tool_probe"] = probe
+    if not probe["results"]:
+        return
+    web = probe["results"]["web_search"]
+    try:
+        configured = config.parse_search_answer_tools()
+    except ValueError:
+        configured = []
+    unsupported = [tool for tool in configured if probe["results"][tool]["status"] == "unsupported"]
+    if web["request_failed"]:
+        error_type, error = web["error_type"] or "provider_error", f"web_search probe failed: {web['reason']}"
+    elif unsupported:
+        error_type, error = "parameter_error", f"Configured search tools are unsupported: {', '.join(unsupported)}"
+    else:
+        return
+    if info["ok"]:
+        info.update({"ok": False, "error_type": error_type, "error": error})
+
+
+async def doctor(probe_tools: bool = False) -> dict[str, Any]:
     start = time.time()
     info = config.get_config_info()
     operations = {}
@@ -567,6 +656,9 @@ async def doctor() -> dict[str, Any]:
     info.update({"ok": all(item["configured"] for item in operations.values()), "operation_status": operations, "intent_router_status": intent_router_status(), "elapsed_ms": _elapsed_ms(start)})
     if not info["ok"]:
         info.update({"error_type": "config_error", "error": "One or more fixed operation executors are not configured"})
+    if probe_tools:
+        _apply_tool_probe(info, await probe_search_tools())
+        info["elapsed_ms"] = _elapsed_ms(start)
     return info
 
 

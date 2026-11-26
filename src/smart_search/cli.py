@@ -202,6 +202,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     setup = sub.add_parser("setup", help="Configure the fixed provider set.")
     setup.add_argument("--non-interactive", action="store_true")
+    setup.add_argument("--probe-tools", action="store_true", help="With --non-interactive, send real requests to check search tool support. Report only.")
     _add_skill_selection_args(setup, include_copy=True)
     for flag in (
         "search-answer-api-url", "search-answer-api-key", "search-answer-model", "search-answer-tools",
@@ -214,6 +215,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_output_args(setup)
 
     doctor = sub.add_parser("doctor", help="Report every operation executor and configuration state.")
+    doctor.add_argument("--probe-tools", action="store_true", help="Send real, possibly billed requests to check search tool support. Never changes config.")
     _add_output_args(doctor)
 
     diagnose = sub.add_parser("diagnose", help="Troubleshoot operations, providers, routing, and smoke checks.")
@@ -517,6 +519,40 @@ def _show_setup_preview(values: dict[str, str], skill_plan: dict[str, Any] | Non
         print(f"  method: {'copy' if skill_plan['copy'] else 'symlink/direct'}", file=sys.stderr)
 
 
+def _tool_set(raw: str) -> set[str]:
+    return {item.strip().lower() for item in raw.split(",") if item.strip()}
+
+
+def _probe_setup_tools(args: argparse.Namespace) -> dict[str, Any]:
+    def say(message: str) -> None:
+        print(message, file=sys.stderr)
+
+    say("Probing search tools with real requests. They may be billed; X search is billed per post and user profile fetched.")
+    probe = asyncio.run(service.probe_search_tools())
+    probe["updated"] = False
+    if probe.get("skipped"):
+        say(f"Tool probe skipped: {probe['skipped']}")
+        return probe
+    for tool, item in probe["results"].items():
+        say(f"  {tool}: {item['status']} - {item['reason']}")
+
+    current, suggested = probe["current_tools"], probe["suggested_tools"]
+    if not suggested:
+        say(f"No conclusive suggestion; SEARCH_ANSWER_TOOLS stays {current}.")
+    elif _tool_set(suggested) == _tool_set(current):
+        say(f"SEARCH_ANSWER_TOOLS already matches the probe: {current}")
+    elif service.config.get_config_source("SEARCH_ANSWER_TOOLS") == "environment":
+        say(f"Suggested {suggested}, but SEARCH_ANSWER_TOOLS comes from the environment; change it there.")
+    elif args.non_interactive:
+        say(f"Suggested SEARCH_ANSWER_TOOLS={suggested} (current {current}); non-interactive setup does not change it.")
+    elif prompt_ui.confirm(f"Update SEARCH_ANSWER_TOOLS: {current} -> {suggested}?", default=True):
+        saved = service.config_set("SEARCH_ANSWER_TOOLS", suggested)
+        probe["updated"] = bool(saved.get("ok"))
+        if not probe["updated"]:
+            say(f"Could not save SEARCH_ANSWER_TOOLS: {saved.get('error', '')}")
+    return probe
+
+
 def _run_setup(args: argparse.Namespace) -> dict[str, Any]:
     values = _setup_values(args)
     skill_plan = _setup_skill_plan(args)
@@ -544,12 +580,16 @@ def _run_setup(args: argparse.Namespace) -> dict[str, Any]:
             scope=skill_plan["scope"],
             copy=skill_plan["copy"],
         )
+    tool_probe = None
+    if not errors and (args.probe_tools or not args.non_interactive):
+        tool_probe = _probe_setup_tools(args)
     return {
         "ok": not errors and (skill_install is None or skill_install.get("ok", False)),
         "config_file": str(service.config.config_file),
         "saved": sorted(values),
         "errors": errors,
         "skill_install": skill_install,
+        "tool_probe": tool_probe,
     }
 
 
@@ -578,7 +618,7 @@ async def _run_async(args: argparse.Namespace) -> int:
     elif args.command == "map":
         data = await service.map_site_operation(args.url, search=args.search, sitemap=args.sitemap, include_subdomains=args.include_subdomains, ignore_query_parameters=args.ignore_query_parameters, ignore_cache=args.ignore_cache, limit=args.limit, timeout=args.timeout, location=args.location, debug=args.debug)
     elif args.command == "doctor":
-        data = await service.doctor()
+        data = await service.doctor(probe_tools=args.probe_tools)
     elif args.command == "diagnose":
         if args.diagnose_command in {"search", "docs", "fetch", "map"}:
             data = await service.diagnose_operation(args.diagnose_command, args.operation)

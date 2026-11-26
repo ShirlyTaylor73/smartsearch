@@ -47,6 +47,14 @@ def _reset_config(monkeypatch, tmp_path):
     cli.service.config._config_dir_source = None
 
 
+@pytest.fixture(autouse=True)
+def offline_tool_probe(monkeypatch):
+    async def fake_probe():
+        return {"current_tools": "web_search", "results": {}, "suggested_tools": None, "skipped": "test"}
+
+    monkeypatch.setattr(cli.service, "probe_search_tools", fake_probe)
+
+
 def test_interactive_setup_uses_select_secret_and_single_final_confirmation(monkeypatch, tmp_path, capsys):
     _reset_config(monkeypatch, tmp_path)
     prompt = FakePromptUI(
