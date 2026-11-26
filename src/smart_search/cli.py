@@ -133,7 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
     search_sub = search.add_subparsers(dest="operation", required=True, parser_class=SmartSearchArgumentParser)
     answer = search_sub.add_parser("answer", help="Generate a web-backed answer through the Responses API.")
     answer.add_argument("query")
-    answer.add_argument("--timeout", type=float, default=90, metavar="SECONDS")
+    answer.add_argument("--timeout", type=float, default=None, metavar="SECONDS", help="Overrides the configured search.answer timeout (default 120).")
     answer.add_argument("--debug", action="store_true")
     _add_output_args(answer)
     sources = search_sub.add_parser("sources", help="Search sources through Exa.")

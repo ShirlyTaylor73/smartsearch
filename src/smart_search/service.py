@@ -258,8 +258,15 @@ async def search_answer(query: str, *, timeout_seconds: float | None = None, deb
     if timeout_seconds is not None:
         if timeout_seconds <= 0:
             return _operation_envelope("search", "answer", ok=False, start=start, error_type="parameter_error", error="--timeout must be positive")
-        budget = min(float(timeout_seconds), budget)
-    extra: dict[str, Any] = {"provider": "responses", "provider_operation": "web answer"}
+        budget = float(timeout_seconds)
+    provider: ResponsesSearchProvider | None = None
+
+    def extra() -> dict[str, Any]:
+        fields: dict[str, Any] = {"provider": "responses", "provider_operation": "web answer"}
+        if debug:
+            fields["debug"] = {"timeout_budget": budget, **getattr(provider, "diagnostics", {})}
+        return fields
+
     try:
         provider = ResponsesSearchProvider(
             config.search_answer_api_url or "",
@@ -272,12 +279,12 @@ async def search_answer(query: str, *, timeout_seconds: float | None = None, deb
         content = answer.content
         if config.output_cleanup_enabled:
             content = sanitize_answer_text(content) or content
-        return _operation_envelope("search", "answer", ok=True, start=start, content=content, sources=answer.sources, extra=extra, debug=debug)
+        return _operation_envelope("search", "answer", ok=True, start=start, content=content, sources=answer.sources, extra=extra(), debug=debug)
     except Exception as exc:
         error_type, error = _operation_exception(exc)
         if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in {404, 405}:
             error = f"{error} (the endpoint may not support POST /responses)"
-        return _operation_envelope("search", "answer", ok=False, start=start, error_type=error_type, error=error, extra=extra, debug=debug)
+        return _operation_envelope("search", "answer", ok=False, start=start, error_type=error_type, error=error, extra=extra(), debug=debug)
 
 
 async def _probe_search_tool(tool: str) -> dict[str, Any]:
