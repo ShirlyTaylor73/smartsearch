@@ -63,7 +63,7 @@ def test_package_metadata_belongs_to_fork_and_uses_stable_release_version():
     package_lock = json.loads((ROOT / "package-lock.json").read_text(encoding="utf-8"))
 
     assert package["name"] == PACKAGE_NAME
-    assert package["version"] == "0.3.5"
+    assert package["version"] == "0.4.0"
     assert package["homepage"] == "https://github.com/ShirlyTaylor73/smartsearch#readme"
     assert package["repository"]["url"] == "git+https://github.com/ShirlyTaylor73/smartsearch.git"
     assert package["bugs"]["url"] == "https://github.com/ShirlyTaylor73/smartsearch/issues"
