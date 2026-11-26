@@ -12,15 +12,18 @@ smart-search --version
 smart-search setup
 ```
 
-Interactive `smart-search setup` uses arrow-key selection for the Grok transport and skill scope, Space for multi-selecting Agent targets, and Y/N confirmations. API key input is hidden. Existing values are confirmed one by one and kept by default; configuration and bundled skill installation start only after the final confirmation.
+Interactive `smart-search setup` asks for the `search answer` base URL, API key and model, uses arrow-key selection for the skill scope, Space for multi-selecting Agent targets, and Y/N confirmations. API key input is hidden. Existing values are confirmed one by one and kept by default; configuration and bundled skill installation start only after the final confirmation.
 
 Environment-provided values are shown as externally managed and are never copied into the config file. Esc/Ctrl-C cancels before writing and exits with status 130. Pipes and CI do not fall back to text menus; use explicit options instead:
 
 ```bash
 smart-search setup --non-interactive \
-  --grok-transport xai-responses \
-  --xai-api-key "$XAI_API_KEY"
+  --search-answer-api-url https://api.x.ai/v1 \
+  --search-answer-api-key "$SEARCH_ANSWER_API_KEY" \
+  --search-answer-model "<model>"
 ```
+
+Non-interactive setup sends no requests by default. With `--probe-tools` it checks search tool support but only reports; it never rewrites `SEARCH_ANSWER_TOOLS`.
 
 You can also install the skill independently with this package's own `npx` command, without a prior global CLI installation:
 
@@ -58,7 +61,7 @@ The CLI source is Python under `src/smart_search/`. The npm package is a cross-p
 
 | Command | Provider / Tool |
 |---|---|
-| `search answer QUERY` | Grok via the configured xAI Responses or OpenAI-compatible transport |
+| `search answer QUERY` | Streaming Responses API (`POST {base_url}/responses`), always with search tools |
 | `search sources QUERY` | Exa Search `/search` |
 | `docs resolve NAME [QUERY]` | Context7 `/api/v2/libs/search` |
 | plain `docs search QUERY` | Context7 `/api/v3/search`, automatic library selection |
@@ -93,11 +96,36 @@ Firecrawl Map defaults are `sitemap=include`, include subdomains, ignore query p
 
 | Provider | Configuration |
 |---|---|
-| Grok | `SMART_SEARCH_GROK_TRANSPORT=xai-responses|openai-compatible` plus the selected transport URL/key/model |
+| Responses (`search answer`) | `SEARCH_ANSWER_API_URL`, `SEARCH_ANSWER_API_KEY`, `SEARCH_ANSWER_MODEL`, `SEARCH_ANSWER_TOOLS` |
 | Exa | `EXA_API_KEY`, `EXA_BASE_URL`, `EXA_TIMEOUT_SECONDS`, `EXA_SEARCH_TYPE` |
 | Context7 | `CONTEXT7_API_KEY`, `CONTEXT7_BASE_URL`, `CONTEXT7_TIMEOUT_SECONDS` |
 | ZRead | `ZHIPU_MCP_API_KEY`, `ZHIPU_MCP_ZREAD_API_URL`, `ZHIPU_MCP_TIMEOUT_SECONDS` |
 | Firecrawl | `FIRECRAWL_API_KEY`, `FIRECRAWL_API_URL`, `FIRECRAWL_TIMEOUT_SECONDS` |
+
+### `search answer`
+
+Official xAI, OpenAI and relays all receive the same request; only configuration differs:
+
+| Key | Meaning |
+|---|---|
+| `SEARCH_ANSWER_API_URL` | Required base URL; requests go to `/responses` under it. Official xAI: `https://api.x.ai/v1` |
+| `SEARCH_ANSWER_API_KEY` | Required |
+| `SEARCH_ANSWER_MODEL` | Required and sent as is; there is no default model |
+| `SEARCH_ANSWER_TOOLS` | Optional comma list of `web_search`, `x_search`; default `web_search`. `x_search` is an xAI tool, so leave it out for other vendors' models |
+
+Every request uses `stream=true` and `tool_choice="required"`. The endpoint must support `/responses`, the configured tools and `tool_choice`. Otherwise the error is returned as is: there is no `/chat/completions` fallback and no retry with parameters removed. `tool_choice="required"` makes the model call a tool; it does not make the answer or its citations correct, so verify important claims with `fetch content`. Sources come from the API's `url_citation` annotations.
+
+An explicit `--timeout` is used as given; otherwise the `search.answer` entry of `SMART_SEARCH_OPERATION_TIMEOUTS` applies, defaulting to 120 seconds. `--debug` adds a redacted `debug` object with tool call counts, response status, token usage and request attempts.
+
+### Search tool probe
+
+Interactive `setup` (first run and reruns alike) saves the configuration, then checks `web_search` and `x_search` separately. It asks before changing the tool list. A tool counts as supported only when the request completes and reports a tool call. Timeouts, rate limits, auth failures and missing call records are `unknown` and never change configuration. A failed probe does not undo the saved values.
+
+```bash
+smart-search doctor --probe-tools   # read-only recheck
+```
+
+The probe sends real requests that may be billed; X search is billed per post and user profile fetched. Editing or importing the config file takes effect immediately; `search answer` never probes or rewrites configuration.
 
 `EXA_SEARCH_TYPE` accepts `instant|fast|auto|deep-lite|deep|deep-reasoning` and defaults to `auto`. `SMART_SEARCH_OPERATION_TIMEOUTS` only overrides known operation budgets, for example `{"search.answer":120,"map.site":180}`.
 
@@ -105,11 +133,28 @@ Firecrawl Map defaults are `sitemap=include`, include subdomains, ignore query p
 smart-search config path
 smart-search config list
 smart-search doctor
+smart-search doctor --probe-tools
 smart-search diagnose search sources
 smart-search diagnose provider firecrawl
 ```
 
 If the responsible provider is missing or fails, the operation stops with a stable error category. It never calls a different provider.
+
+## `search answer` configuration migration
+
+The two former transports are now one. `SMART_SEARCH_GROK_TRANSPORT`, `OPENAI_COMPATIBLE_*` and `XAI_*` are no longer read at runtime.
+
+| Old key | New key |
+|---|---|
+| `OPENAI_COMPATIBLE_API_URL` / `XAI_API_URL` | `SEARCH_ANSWER_API_URL` (set `https://api.x.ai/v1` explicitly if you relied on the xAI default) |
+| `OPENAI_COMPATIBLE_API_KEY` / `XAI_API_KEY` | `SEARCH_ANSWER_API_KEY` |
+| `OPENAI_COMPATIBLE_MODEL` / `XAI_MODEL` | `SEARCH_ANSWER_MODEL` |
+| `XAI_TOOLS` | `SEARCH_ANSWER_TOOLS` (the default is now `web_search`) |
+| `SMART_SEARCH_GROK_TRANSPORT`, `OPENAI_COMPATIBLE_STREAM` | removed |
+
+Interactive `smart-search setup` reads the set the old release actually used (chosen by `SMART_SEARCH_GROK_TRANSPORT`) from the config file and asks before reusing each value. The tool list is not migrated; the probe suggests it. Old keys stay in the file so an older install keeps working; remove them with `config unset` once unused. Non-interactive setup and environment variables must switch to the new keys by hand.
+
+Services that only offer `/chat/completions` no longer work. The `:online` model suffix is no longer appended for OpenRouter URLs.
 
 ## 0.3.0 Migration
 

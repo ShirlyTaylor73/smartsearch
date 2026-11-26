@@ -11,7 +11,13 @@ smart-search search answer QUERY [--timeout SECONDS] [COMMON_FLAGS]
 | Argument | Meaning |
 |---|---|
 | `QUERY` | Required question or search request. |
-| `--timeout SECONDS` | Positive floating-point timeout. Default: `90`. |
+| `--timeout SECONDS` | Positive floating-point timeout, used as given. Default: the configured `search.answer` budget (`120`). |
+
+The answer comes from a Responses API request that must call a search tool. A tool call does not prove the answer is correct: check important claims by reading the returned `sources` with `fetch content`.
+
+With `--debug`, JSON output adds a `debug` object (tools, tool call counts, response status, token usage, request attempts).
+
+If the operation fails with `config_error` or the endpoint rejects a tool, report it to the maintainer. `smart-search doctor --probe-tools` checks tool support without changing configuration; it sends real requests that may be billed.
 
 Example:
 
