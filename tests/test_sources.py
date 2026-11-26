@@ -2,7 +2,6 @@ import pytest
 
 from smart_search.sources import (
     sanitize_answer_text,
-    split_answer_and_sources,
     merge_sources,
 )
 
@@ -44,58 +43,6 @@ class TestSanitizeAnswerText:
     def test_think_block_only(self):
         result = sanitize_answer_text("<think>only reasoning</think>")
         assert result == ""
-
-
-class TestSplitAnswerAndSources:
-    def test_no_sources(self):
-        answer, sources = split_answer_and_sources("Just a plain answer.")
-        assert answer == "Just a plain answer."
-        assert sources == []
-
-    def test_empty_input(self):
-        answer, sources = split_answer_and_sources("")
-        assert answer == ""
-        assert sources == []
-
-    def test_none_input(self):
-        answer, sources = split_answer_and_sources(None)
-        assert answer == ""
-        assert sources == []
-
-    def test_heading_sources(self):
-        text = "Here is the answer.\n\n## Sources\n- [Example](https://example.com)\n- [Test](https://test.com)"
-        answer, sources = split_answer_and_sources(text)
-        assert "Here is the answer" in answer
-        assert len(sources) >= 2
-        urls = [s["url"] for s in sources]
-        assert "https://example.com" in urls
-        assert "https://test.com" in urls
-
-    def test_function_call_sources(self):
-        text = 'The answer is here.\n\nsources([{"url": "https://example.com", "title": "Ex"}])'
-        answer, sources = split_answer_and_sources(text)
-        assert "The answer is here" in answer
-        assert len(sources) == 1
-        assert sources[0]["url"] == "https://example.com"
-
-    def test_inline_citation_sources_are_extracted_and_answer_keeps_links(self):
-        text = "The answer cites [[1]](https://example.com/a) and [[2]](https://example.com/b)."
-        answer, sources = split_answer_and_sources(text)
-        assert answer == text
-        assert [s["url"] for s in sources] == ["https://example.com/a", "https://example.com/b"]
-
-    def test_inline_citation_sources_deduplicate_by_url(self):
-        text = "A [[1]](https://example.com/a) and again [[2]](https://example.com/a)."
-        answer, sources = split_answer_and_sources(text)
-        assert answer == text
-        assert len(sources) == 1
-        assert sources[0]["url"] == "https://example.com/a"
-
-    def test_inline_citations_merge_with_function_sources(self):
-        text = 'A [[1]](https://example.com/a).\n\nsources([{"url": "https://example.com/a"}, {"url": "https://example.com/b"}])'
-        answer, sources = split_answer_and_sources(text)
-        assert "[[1]](https://example.com/a)" in answer
-        assert [s["url"] for s in sources] == ["https://example.com/a", "https://example.com/b"]
 
 
 class TestMergeSources:

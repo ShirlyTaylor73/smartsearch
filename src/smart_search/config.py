@@ -6,36 +6,28 @@ from pathlib import Path
 class Config:
     _instance = None
     _SETUP_COMMAND = (
-        "Run `smart-search setup`, or configure XAI_API_KEY and/or "
-        "OPENAI_COMPATIBLE_API_URL plus OPENAI_COMPATIBLE_API_KEY, then run "
+        "Run `smart-search setup`, or configure SEARCH_ANSWER_API_URL, "
+        "SEARCH_ANSWER_API_KEY and SEARCH_ANSWER_MODEL, then run "
         "`smart-search doctor --format json`."
     )
-    _DEFAULT_MODEL = "grok-4-fast"
-    _DEFAULT_XAI_TOOLS = "web_search,x_search"
+    _DEFAULT_SEARCH_ANSWER_TOOLS = "web_search"
     _DEFAULT_VALIDATION_LEVEL = "balanced"
-    _DEFAULT_GROK_TRANSPORT = "openai-compatible"
     _DEFAULT_EXA_SEARCH_TYPE = "auto"
     _DEFAULT_MINIMUM_PROFILE = "standard"
     _DEFAULT_INTENT_ROUTER_MODE = "hybrid"
     _DEFAULT_INTENT_ROUTER_TIMEOUT_SECONDS = "8"
     _DEFAULT_INTENT_EMBEDDING_THRESHOLD = "0.74"
     _DEFAULT_INTENT_EMBEDDING_MARGIN = "0.05"
-    _ALLOWED_XAI_TOOLS = {"web_search", "x_search"}
+    _ALLOWED_SEARCH_ANSWER_TOOLS = {"web_search", "x_search"}
     _ALLOWED_VALIDATION_LEVELS = {"fast", "balanced", "strict"}
-    _ALLOWED_GROK_TRANSPORTS = {"xai-responses", "openai-compatible"}
     _ALLOWED_EXA_SEARCH_TYPES = {"instant", "fast", "auto", "deep-lite", "deep", "deep-reasoning"}
     _ALLOWED_MINIMUM_PROFILES = {"standard", "off"}
     _ALLOWED_INTENT_ROUTER_MODES = {"hybrid", "rules", "off"}
     _CONFIG_KEYS = {
-        "XAI_API_URL",
-        "XAI_API_KEY",
-        "XAI_MODEL",
-        "XAI_TOOLS",
-        "SMART_SEARCH_GROK_TRANSPORT",
-        "OPENAI_COMPATIBLE_API_URL",
-        "OPENAI_COMPATIBLE_API_KEY",
-        "OPENAI_COMPATIBLE_MODEL",
-        "OPENAI_COMPATIBLE_STREAM",
+        "SEARCH_ANSWER_API_URL",
+        "SEARCH_ANSWER_API_KEY",
+        "SEARCH_ANSWER_MODEL",
+        "SEARCH_ANSWER_TOOLS",
         "SMART_SEARCH_VALIDATION_LEVEL",
         "SMART_SEARCH_MINIMUM_PROFILE",
         "SMART_SEARCH_OPERATION_TIMEOUTS",
@@ -73,6 +65,22 @@ class Config:
         "SSL_VERIFY",
     }
     _LEGACY_CONFIG_KEYS: dict[str, str] = {}
+    # No longer read at runtime. `config unset` still accepts them so old files can be cleaned.
+    _REMOVED_CONFIG_KEYS = {
+        "OPENAI_COMPATIBLE_API_URL",
+        "OPENAI_COMPATIBLE_API_KEY",
+        "OPENAI_COMPATIBLE_MODEL",
+        "OPENAI_COMPATIBLE_STREAM",
+        "OPENAI_COMPATIBLE_FALLBACK_MODELS",
+        "XAI_API_URL",
+        "XAI_API_KEY",
+        "XAI_MODEL",
+        "XAI_TOOLS",
+        "SMART_SEARCH_GROK_TRANSPORT",
+        "SMART_SEARCH_FALLBACK_MODE",
+        "SMART_SEARCH_OPERATION_CONFIG",
+    }
+    XAI_OFFICIAL_API_URL = "https://api.x.ai/v1"
 
     def __new__(cls):
         if cls._instance is None:
@@ -223,15 +231,10 @@ class Config:
         config_data[key] = value
         self._save_config_file(config_data)
         if key in {
-            "XAI_API_URL",
-            "XAI_API_KEY",
-            "XAI_MODEL",
-            "XAI_TOOLS",
-            "OPENAI_COMPATIBLE_API_URL",
-            "OPENAI_COMPATIBLE_API_KEY",
-            "OPENAI_COMPATIBLE_MODEL",
-            "OPENAI_COMPATIBLE_STREAM",
-            "SMART_SEARCH_GROK_TRANSPORT",
+            "SEARCH_ANSWER_API_URL",
+            "SEARCH_ANSWER_API_KEY",
+            "SEARCH_ANSWER_MODEL",
+            "SEARCH_ANSWER_TOOLS",
             "SMART_SEARCH_VALIDATION_LEVEL",
             "SMART_SEARCH_MINIMUM_PROFILE",
             "SMART_SEARCH_INTENT_ROUTER",
@@ -240,7 +243,7 @@ class Config:
 
     def unset_config_value(self, key: str) -> None:
         key = key.strip().upper()
-        if key not in self._CONFIG_KEYS:
+        if key not in self._CONFIG_KEYS and key not in self._REMOVED_CONFIG_KEYS:
             raise ValueError(f"Unsupported config key: {key}")
         config_data = self._load_config_file()
         config_data.pop(key, None)
@@ -249,15 +252,10 @@ class Config:
                 config_data.pop(old_key, None)
         self._save_config_file(config_data)
         if key in {
-            "XAI_API_URL",
-            "XAI_API_KEY",
-            "XAI_MODEL",
-            "XAI_TOOLS",
-            "OPENAI_COMPATIBLE_API_URL",
-            "OPENAI_COMPATIBLE_API_KEY",
-            "OPENAI_COMPATIBLE_MODEL",
-            "OPENAI_COMPATIBLE_STREAM",
-            "SMART_SEARCH_GROK_TRANSPORT",
+            "SEARCH_ANSWER_API_URL",
+            "SEARCH_ANSWER_API_KEY",
+            "SEARCH_ANSWER_MODEL",
+            "SEARCH_ANSWER_TOOLS",
             "SMART_SEARCH_VALIDATION_LEVEL",
             "SMART_SEARCH_MINIMUM_PROFILE",
             "SMART_SEARCH_INTENT_ROUTER",
@@ -295,66 +293,71 @@ class Config:
         return int(self._get_config_value("SMART_SEARCH_RETRY_MAX_WAIT", "10") or "10")
 
     @property
-    def xai_api_url(self) -> str:
-        return self._get_config_value("XAI_API_URL", "https://api.x.ai/v1") or "https://api.x.ai/v1"
+    def search_answer_api_url(self) -> str | None:
+        return self._get_config_value("SEARCH_ANSWER_API_URL")
 
     @property
-    def xai_api_key(self) -> str | None:
-        return self._get_config_value("XAI_API_KEY")
+    def search_answer_api_key(self) -> str | None:
+        return self._get_config_value("SEARCH_ANSWER_API_KEY")
 
     @property
-    def xai_model(self) -> str:
-        return self._get_config_value("XAI_MODEL") or self._base_model_value()
+    def search_answer_model(self) -> str | None:
+        return self._get_config_value("SEARCH_ANSWER_MODEL")
 
     @property
-    def xai_tools_raw(self) -> str:
-        return self._get_config_value("XAI_TOOLS", self._DEFAULT_XAI_TOOLS) or self._DEFAULT_XAI_TOOLS
+    def search_answer_tools_raw(self) -> str:
+        raw = (self._get_config_value("SEARCH_ANSWER_TOOLS") or "").strip()
+        return raw or self._DEFAULT_SEARCH_ANSWER_TOOLS
 
-    @property
-    def grok_transport(self) -> str:
-        return self._validated_enum(
-            "SMART_SEARCH_GROK_TRANSPORT",
-            self._DEFAULT_GROK_TRANSPORT,
-            self._ALLOWED_GROK_TRANSPORTS,
-        )
-
-    @property
-    def openai_compatible_api_url(self) -> str | None:
-        return self._get_config_value("OPENAI_COMPATIBLE_API_URL")
-
-    @property
-    def openai_compatible_api_key(self) -> str | None:
-        return self._get_config_value("OPENAI_COMPATIBLE_API_KEY")
-
-    @property
-    def openai_compatible_model(self) -> str:
-        model = self._get_config_value("OPENAI_COMPATIBLE_MODEL") or self._base_model_value()
-        return self.apply_model_suffix_for_url(model, self.openai_compatible_api_url or "")
-
-    @property
-    def openai_compatible_stream(self) -> bool:
-        return (self._get_config_value("OPENAI_COMPATIBLE_STREAM", "false") or "false").lower() in ("true", "1", "yes")
-
-    def parse_xai_tools(self, raw: str | None = None) -> list[str]:
-        raw = raw or self.xai_tools_raw
-        tools: list[str] = []
-        invalid: list[str] = []
-        seen: set[str] = set()
-        for item in raw.split(","):
-            tool = item.strip().lower()
-            if not tool:
-                continue
-            if tool not in self._ALLOWED_XAI_TOOLS:
-                invalid.append(tool)
-                continue
-            if tool not in seen:
-                seen.add(tool)
-                tools.append(tool)
-        if invalid:
-            allowed = ", ".join(sorted(self._ALLOWED_XAI_TOOLS))
-            invalid_text = ", ".join(invalid)
-            raise ValueError(f"Invalid XAI_TOOLS: {invalid_text}. Supported values: {allowed}")
+    def parse_search_answer_tools(self, raw: str | None = None) -> list[str]:
+        raw = (raw or "").strip() or self.search_answer_tools_raw
+        tools = list(dict.fromkeys(item.strip().lower() for item in raw.split(",") if item.strip()))
+        invalid = [tool for tool in tools if tool not in self._ALLOWED_SEARCH_ANSWER_TOOLS]
+        if invalid or not tools:
+            allowed = ", ".join(sorted(self._ALLOWED_SEARCH_ANSWER_TOOLS))
+            raise ValueError(f"Invalid SEARCH_ANSWER_TOOLS: {', '.join(invalid) or raw}. Supported values: {allowed}")
         return tools
+
+    def search_answer_missing_config(self) -> list[str]:
+        values = {
+            "SEARCH_ANSWER_API_URL": self.search_answer_api_url,
+            "SEARCH_ANSWER_API_KEY": self.search_answer_api_key,
+            "SEARCH_ANSWER_MODEL": self.search_answer_model,
+        }
+        return [key for key, value in values.items() if not value]
+
+    def search_answer_migration_hint(self) -> str:
+        """Key names only; old values are never echoed."""
+        data = self._load_config_file()
+        hints: list[str] = []
+        for prefix, suffixes in (
+            ("OPENAI_COMPATIBLE", ("API_URL", "API_KEY", "MODEL")),
+            ("XAI", ("API_URL", "API_KEY", "MODEL", "TOOLS")),
+        ):
+            if not any(f"{prefix}_{suffix}" in data or os.getenv(f"{prefix}_{suffix}") for suffix in suffixes):
+                continue
+            mapping = ", ".join(f"{prefix}_{suffix} -> SEARCH_ANSWER_{suffix}" for suffix in suffixes)
+            hint = f"Old {prefix}_* settings are no longer read. Rename: {mapping}."
+            if prefix == "XAI":
+                hint += f" The official xAI URL {self.XAI_OFFICIAL_API_URL} must now be set explicitly."
+            hints.append(hint)
+        if hints:
+            hints.append("Run `smart-search setup` to review and reuse saved values.")
+        return " ".join(hints)
+
+    def legacy_search_answer_values(self) -> dict[str, tuple[str, str]]:
+        """Saved values of the set the old release actually used, as {new_key: (origin, value)}."""
+        data = self._load_config_file()
+        use_xai = str(data.get("SMART_SEARCH_GROK_TRANSPORT") or "").strip().lower() == "xai-responses"
+        prefix = "XAI" if use_xai else "OPENAI_COMPATIBLE"
+        values: dict[str, tuple[str, str]] = {}
+        for suffix in ("API_URL", "API_KEY", "MODEL"):
+            old_key = f"{prefix}_{suffix}"
+            if data.get(old_key):
+                values[f"SEARCH_ANSWER_{suffix}"] = (old_key, str(data[old_key]))
+        if use_xai and values and "SEARCH_ANSWER_API_URL" not in values:
+            values["SEARCH_ANSWER_API_URL"] = ("the official xAI URL", self.XAI_OFFICIAL_API_URL)
+        return values
 
     def _validated_enum(self, key: str, default: str, allowed: set[str]) -> str:
         value = (self._get_config_value(key, default) or default).strip().lower()
@@ -532,15 +535,6 @@ class Config:
         return self._get_config_value("SMART_SEARCH_LOG_DIR", "logs") or "logs"
 
     @staticmethod
-    def apply_model_suffix_for_url(model: str, api_url: str) -> str:
-        if "openrouter" in api_url and ":online" not in model:
-            return f"{model}:online"
-        return model
-
-    def _base_model_value(self) -> str:
-        return self._DEFAULT_MODEL
-
-    @staticmethod
     def _mask_api_key(key: str) -> str:
         if not key or len(key) <= 8:
             return "***"
@@ -613,21 +607,17 @@ class Config:
 
     def get_config_info(self) -> dict:
         config_parameter_errors: list[str] = []
-        grok_transport, grok_transport_error = self._enum_info(
-            "SMART_SEARCH_GROK_TRANSPORT",
-            self._DEFAULT_GROK_TRANSPORT,
-            self._ALLOWED_GROK_TRANSPORTS,
-        )
         exa_search_type, exa_search_type_error = self._enum_info(
             "EXA_SEARCH_TYPE",
             self._DEFAULT_EXA_SEARCH_TYPE,
             self._ALLOWED_EXA_SEARCH_TYPES,
         )
-        explicit_main_configured = bool(
-            self.xai_api_key
-            if grok_transport == "xai-responses"
-            else self.openai_compatible_api_url and self.openai_compatible_api_key
-        )
+        explicit_main_configured = not self.search_answer_missing_config()
+        tools_error = ""
+        try:
+            self.parse_search_answer_tools()
+        except ValueError as e:
+            tools_error = str(e)
         if explicit_main_configured:
             config_status = "ok: 配置完整"
         else:
@@ -668,7 +658,7 @@ class Config:
             error
             for error in (
                 validation_error,
-                grok_transport_error,
+                tools_error,
                 exa_search_type_error,
                 minimum_error,
                 intent_router_error,
@@ -682,15 +672,10 @@ class Config:
             config_status = f"config_error: {'; '.join(config_parameter_errors)}"
 
         return {
-            "XAI_API_URL": self.xai_api_url,
-            "XAI_API_KEY": self._mask_api_key(self.xai_api_key) if self.xai_api_key else "未配置",
-            "XAI_MODEL": self.xai_model,
-            "XAI_TOOLS": self.xai_tools_raw,
-            "SMART_SEARCH_GROK_TRANSPORT": grok_transport,
-            "OPENAI_COMPATIBLE_API_URL": self.openai_compatible_api_url or "未配置",
-            "OPENAI_COMPATIBLE_API_KEY": self._mask_api_key(self.openai_compatible_api_key) if self.openai_compatible_api_key else "未配置",
-            "OPENAI_COMPATIBLE_MODEL": self.openai_compatible_model,
-            "OPENAI_COMPATIBLE_STREAM": self.openai_compatible_stream,
+            "SEARCH_ANSWER_API_URL": self.search_answer_api_url or "未配置",
+            "SEARCH_ANSWER_API_KEY": self._mask_api_key(self.search_answer_api_key) if self.search_answer_api_key else "未配置",
+            "SEARCH_ANSWER_MODEL": self.search_answer_model or "未配置",
+            "SEARCH_ANSWER_TOOLS": self.search_answer_tools_raw,
             "SMART_SEARCH_VALIDATION_LEVEL": validation_level,
             "SMART_SEARCH_MINIMUM_PROFILE": minimum_profile,
             "SMART_SEARCH_OPERATION_TIMEOUTS": self.operation_timeouts,
@@ -726,8 +711,8 @@ class Config:
             "ZHIPU_MCP_API_KEY": self._mask_api_key(self.zhipu_mcp_api_key) if self.zhipu_mcp_api_key else "未配置",
             "ZHIPU_MCP_ZREAD_API_URL": self.zhipu_mcp_zread_api_url,
             "ZHIPU_MCP_TIMEOUT_SECONDS": self.zhipu_mcp_timeout,
-            "primary_api_mode": grok_transport if explicit_main_configured else "未配置",
-            "primary_api_mode_source": self.get_config_source("SMART_SEARCH_GROK_TRANSPORT"),
+            "primary_api_mode": "responses",
+            "primary_api_mode_source": self.get_config_source("SEARCH_ANSWER_API_URL"),
             "config_file": str(self.config_file),
             "config_dir": str(self.config_file.parent),
             "config_dir_source": self.config_dir_source,

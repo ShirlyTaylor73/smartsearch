@@ -131,7 +131,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     search = sub.add_parser("search", help="Answer web questions or discover sources.")
     search_sub = search.add_subparsers(dest="operation", required=True, parser_class=SmartSearchArgumentParser)
-    answer = search_sub.add_parser("answer", help="Generate a Grok web-backed answer.")
+    answer = search_sub.add_parser("answer", help="Generate a web-backed answer through the Responses API.")
     answer.add_argument("query")
     answer.add_argument("--timeout", type=float, default=90, metavar="SECONDS")
     answer.add_argument("--debug", action="store_true")
@@ -203,10 +203,8 @@ def build_parser() -> argparse.ArgumentParser:
     setup = sub.add_parser("setup", help="Configure the fixed provider set.")
     setup.add_argument("--non-interactive", action="store_true")
     _add_skill_selection_args(setup, include_copy=True)
-    setup.add_argument("--grok-transport", choices=["xai-responses", "openai-compatible"], default="")
     for flag in (
-        "xai-api-url", "xai-api-key", "xai-model", "xai-tools",
-        "openai-compatible-api-url", "openai-compatible-api-key", "openai-compatible-model", "openai-compatible-stream",
+        "search-answer-api-url", "search-answer-api-key", "search-answer-model", "search-answer-tools",
         "exa-api-key", "exa-base-url", "exa-search-type",
         "context7-api-key", "context7-base-url",
         "zhipu-mcp-api-key", "zhipu-mcp-zread-api-url",
@@ -225,7 +223,7 @@ def build_parser() -> argparse.ArgumentParser:
         item.add_argument("operation", nargs="?", choices=operations, default="")
         _add_output_args(item)
     provider = diagnose_sub.add_parser("provider")
-    provider.add_argument("provider", choices=["xai-responses", "openai-compatible", "exa", "context7", "zhipu-mcp-zread", "firecrawl"])
+    provider.add_argument("provider", choices=["responses", "exa", "context7", "zhipu-mcp-zread", "firecrawl"])
     provider.add_argument("--live", action="store_true")
     provider.add_argument("--timeout", type=float, default=30)
     _add_output_args(provider)
@@ -271,15 +269,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _setup_argument_values(args: argparse.Namespace) -> dict[str, str]:
     return {
-        "SMART_SEARCH_GROK_TRANSPORT": args.grok_transport,
-        "XAI_API_URL": args.xai_api_url,
-        "XAI_API_KEY": args.xai_api_key,
-        "XAI_MODEL": args.xai_model,
-        "XAI_TOOLS": args.xai_tools,
-        "OPENAI_COMPATIBLE_API_URL": args.openai_compatible_api_url,
-        "OPENAI_COMPATIBLE_API_KEY": args.openai_compatible_api_key,
-        "OPENAI_COMPATIBLE_MODEL": args.openai_compatible_model,
-        "OPENAI_COMPATIBLE_STREAM": args.openai_compatible_stream,
+        "SEARCH_ANSWER_API_URL": args.search_answer_api_url,
+        "SEARCH_ANSWER_API_KEY": args.search_answer_api_key,
+        "SEARCH_ANSWER_MODEL": args.search_answer_model,
+        "SEARCH_ANSWER_TOOLS": args.search_answer_tools,
         "EXA_API_KEY": args.exa_api_key,
         "EXA_BASE_URL": args.exa_base_url,
         "EXA_SEARCH_TYPE": args.exa_search_type,
@@ -292,13 +285,16 @@ def _setup_argument_values(args: argparse.Namespace) -> dict[str, str]:
     }
 
 
-def _setup_required_keys(transport: str) -> list[str]:
-    grok = ["XAI_API_KEY"] if transport == "xai-responses" else [
-        "OPENAI_COMPATIBLE_API_URL",
-        "OPENAI_COMPATIBLE_API_KEY",
-        "OPENAI_COMPATIBLE_MODEL",
+def _setup_required_keys() -> list[str]:
+    return [
+        "SEARCH_ANSWER_API_URL",
+        "SEARCH_ANSWER_API_KEY",
+        "SEARCH_ANSWER_MODEL",
+        "EXA_API_KEY",
+        "CONTEXT7_API_KEY",
+        "ZHIPU_MCP_API_KEY",
+        "FIRECRAWL_API_KEY",
     ]
-    return grok + ["EXA_API_KEY", "CONTEXT7_API_KEY", "ZHIPU_MCP_API_KEY", "FIRECRAWL_API_KEY"]
 
 
 def _is_secret_key(key: str) -> bool:
@@ -320,29 +316,18 @@ def _current_setup_value(key: str, saved: dict[str, str]) -> tuple[str, str]:
     return saved.get(key, ""), source
 
 
-def _setup_values(args: argparse.Namespace) -> tuple[dict[str, str], str]:
+def _setup_values(args: argparse.Namespace) -> dict[str, str]:
     explicit = _setup_argument_values(args)
     if args.non_interactive:
-        transport = explicit["SMART_SEARCH_GROK_TRANSPORT"] or service.config.grok_transport
-        explicit["SMART_SEARCH_GROK_TRANSPORT"] = transport
-        return {key: value for key, value in explicit.items() if value != ""}, transport
+        return {key: value for key, value in explicit.items() if value != ""}
 
     prompt_ui.require_tty(
         "Interactive setup requires a terminal; use --non-interactive with explicit provider options"
     )
     saved = service.config.get_saved_config(masked=False)
-    current_transport = explicit["SMART_SEARCH_GROK_TRANSPORT"] or service.config.grok_transport
-    transport = explicit["SMART_SEARCH_GROK_TRANSPORT"] or prompt_ui.select(
-        "Grok transport",
-        [
-            {"name": "OpenAI-compatible", "value": "openai-compatible"},
-            {"name": "xAI Responses", "value": "xai-responses"},
-        ],
-        default=current_transport,
-    )
-    explicit["SMART_SEARCH_GROK_TRANSPORT"] = str(transport)
+    legacy = service.config.legacy_search_answer_values()
 
-    for key in _setup_required_keys(str(transport)):
+    for key in _setup_required_keys():
         if explicit.get(key):
             continue
         current, source = _current_setup_value(key, saved)
@@ -360,13 +345,18 @@ def _setup_values(args: argparse.Namespace) -> tuple[dict[str, str], str]:
             default=True,
         ):
             continue
+        if not current and key in legacy:
+            origin, old_value = legacy[key]
+            if prompt_ui.confirm(f"Reuse {origin} ({_masked_value(key, old_value)}) as {key}?", default=True):
+                explicit[key] = old_value
+                continue
         value = (
             prompt_ui.secret(key, required=True)
             if _is_secret_key(key)
             else prompt_ui.text(key, default=current, required=True)
         )
         explicit[key] = value
-    return {key: value for key, value in explicit.items() if value != ""}, str(transport)
+    return {key: value for key, value in explicit.items() if value != ""}
 
 
 def _skill_scope(args: argparse.Namespace, *, non_interactive: bool = False) -> str:
@@ -511,10 +501,10 @@ def _setup_skill_plan(args: argparse.Namespace) -> dict[str, Any] | None:
     return {"scope": scope, "targets": targets, "copy": copy_mode}
 
 
-def _show_setup_preview(values: dict[str, str], transport: str, skill_plan: dict[str, Any] | None) -> None:
+def _show_setup_preview(values: dict[str, str], skill_plan: dict[str, Any] | None) -> None:
     saved = service.config.get_saved_config(masked=False)
     print("Configuration summary:", file=sys.stderr)
-    keys = list(dict.fromkeys(_setup_required_keys(transport) + sorted(values)))
+    keys = list(dict.fromkeys(_setup_required_keys() + sorted(values)))
     for key in keys:
         current, source = _current_setup_value(key, saved)
         value = values.get(key, current)
@@ -528,10 +518,10 @@ def _show_setup_preview(values: dict[str, str], transport: str, skill_plan: dict
 
 
 def _run_setup(args: argparse.Namespace) -> dict[str, Any]:
-    values, transport = _setup_values(args)
+    values = _setup_values(args)
     skill_plan = _setup_skill_plan(args)
     if not args.non_interactive and not args.yes:
-        _show_setup_preview(values, transport, skill_plan)
+        _show_setup_preview(values, skill_plan)
         if not prompt_ui.confirm("Apply this setup?", default=False):
             return {
                 "ok": True,

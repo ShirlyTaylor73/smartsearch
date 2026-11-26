@@ -40,9 +40,7 @@ try {
     "smart-search",
     "setup",
     "--non-interactive",
-    "--grok-transport",
-    "xai-responses",
-    "--xai-api-key",
+    "--search-answer-api-key",
     "packaged-test-key",
     "--format",
     "json"
@@ -51,7 +49,7 @@ try {
     env: { SMART_SEARCH_CONFIG_DIR: setupConfigRoot }
   });
   const setupResult = JSON.parse(setupOutput);
-  if (!setupResult.ok || !setupResult.saved.includes("XAI_API_KEY")) {
+  if (!setupResult.ok || !setupResult.saved.includes("SEARCH_ANSWER_API_KEY")) {
     throw new Error("packaged non-interactive setup did not save the explicit provider configuration");
   }
   if (!fs.existsSync(path.join(setupConfigRoot, "config.json"))) {

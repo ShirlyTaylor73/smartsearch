@@ -12,14 +12,13 @@ from .intent_router import IntentRouter
 from .providers.context7 import Context7Provider
 from .providers.exa import ExaSearchProvider
 from .providers.firecrawl import FirecrawlProvider
-from .providers.openai_compatible import OpenAICompatibleSearchProvider
-from .providers.xai_responses import XAIResponsesSearchProvider
+from .providers.responses import ResponsesError, ResponsesSearchProvider, http_error_type
 from .providers.zhipu_mcp import ZhipuMCPProvider
-from .sources import split_answer_and_sources
+from .sources import sanitize_answer_text
 
 
 OPERATION_PROFILES: dict[str, dict[str, Any]] = {
-    "search.answer": {"executor": "search_answer", "responsible_provider": "grok", "required_config": ["SMART_SEARCH_GROK_TRANSPORT"], "default_timeout": 120.0, "normalizer": "answer"},
+    "search.answer": {"executor": "search_answer", "responsible_provider": "responses", "required_config": ["SEARCH_ANSWER_API_URL", "SEARCH_ANSWER_API_KEY", "SEARCH_ANSWER_MODEL"], "default_timeout": 120.0, "normalizer": "answer"},
     "search.sources": {"executor": "search_sources", "responsible_provider": "exa", "required_config": ["EXA_API_KEY"], "default_timeout": 30.0, "normalizer": "results"},
     "docs.resolve": {"executor": "docs_resolve", "responsible_provider": "context7", "required_config": ["CONTEXT7_API_KEY"], "default_timeout": 30.0, "normalizer": "candidates"},
     "docs.search": {"executor": "docs_search", "responsible_provider": "context7-or-zread", "required_config": [], "default_timeout": 30.0, "normalizer": "results"},
@@ -31,8 +30,7 @@ OPERATION_PROFILES: dict[str, dict[str, Any]] = {
 }
 
 PROVIDER_PROFILES: dict[str, dict[str, Any]] = {
-    "xai-responses": {"operations": ["search.answer"], "transport": "xAI Responses"},
-    "openai-compatible": {"operations": ["search.answer"], "transport": "OpenAI-compatible"},
+    "responses": {"operations": ["search.answer"], "transport": "Responses API"},
     "exa": {"operations": ["search.sources"]},
     "context7": {"operations": ["docs.resolve", "docs.search"]},
     "zhipu-mcp-zread": {"operations": ["docs.search", "docs.tree", "docs.read"]},
@@ -135,8 +133,7 @@ def _operation_envelope(
 def _redact_sensitive(text: str) -> str:
     redacted = str(text or "")
     for secret in (
-        config.xai_api_key,
-        config.openai_compatible_api_key,
+        config.search_answer_api_key,
         config.exa_api_key,
         config.context7_api_key,
         config.zhipu_mcp_api_key,
@@ -150,19 +147,11 @@ def _redact_sensitive(text: str) -> str:
 def _operation_exception(exc: BaseException) -> tuple[str, str]:
     if isinstance(exc, (asyncio.TimeoutError, httpx.TimeoutException, TimeoutError)):
         return "timeout", "operation timed out"
+    if isinstance(exc, ResponsesError):
+        return exc.error_type, _redact_sensitive(str(exc))
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
-        if status in {400, 422}:
-            error_type = "parameter_error"
-        elif status in {401, 403}:
-            error_type = "auth_error"
-        elif status == 429:
-            error_type = "rate_limited"
-        elif status >= 500:
-            error_type = "network_error"
-        else:
-            error_type = "provider_error"
-        return error_type, _redact_sensitive(f"HTTP {status}: {exc.response.text[:300]}")
+        return http_error_type(status), _redact_sensitive(f"HTTP {status}: {exc.response.text[:300]}")
     if isinstance(exc, httpx.RequestError):
         return "network_error", _redact_sensitive(str(exc))
     if isinstance(exc, (json.JSONDecodeError, TypeError, KeyError)):
@@ -245,35 +234,43 @@ async def zhipu_mcp_read_file(repo: str, path: str) -> dict[str, Any]:
 
 async def search_answer(query: str, *, timeout_seconds: float | None = None, debug: bool = False) -> dict[str, Any]:
     start = time.time()
+
+    def config_error(message: str) -> dict[str, Any]:
+        return _operation_envelope("search", "answer", ok=False, start=start, error_type="config_error", error=message)
+
+    missing = config.search_answer_missing_config()
+    if missing:
+        message = f"search.answer requires {', '.join(missing)}; run `smart-search diagnose search answer`"
+        hint = config.search_answer_migration_hint()
+        return config_error(f"{message}. {hint}" if hint else message)
     try:
-        transport = config.grok_transport
+        tools = config.parse_search_answer_tools()
+        budget = operation_policy("search.answer")["timeout"]
     except ValueError as exc:
-        return _operation_envelope("search", "answer", ok=False, start=start, error_type="config_error", error=str(exc))
-    budget = operation_policy("search.answer")["timeout"]
+        return config_error(str(exc))
     if timeout_seconds is not None:
         if timeout_seconds <= 0:
             return _operation_envelope("search", "answer", ok=False, start=start, error_type="parameter_error", error="--timeout must be positive")
         budget = min(float(timeout_seconds), budget)
+    extra: dict[str, Any] = {"provider": "responses", "provider_operation": "web answer"}
     try:
-        if transport == "xai-responses":
-            if not config.xai_api_key:
-                raise ValueError("search.answer requires XAI_API_KEY; run `smart-search diagnose search answer`")
-            provider: Any = XAIResponsesSearchProvider(config.xai_api_url, config.xai_api_key, config.xai_model, config.parse_xai_tools())
-        else:
-            missing = [key for key, value in (("OPENAI_COMPATIBLE_API_URL", config.openai_compatible_api_url), ("OPENAI_COMPATIBLE_API_KEY", config.openai_compatible_api_key), ("OPENAI_COMPATIBLE_MODEL", config.openai_compatible_model)) if not value]
-            if missing:
-                raise ValueError(f"search.answer requires {', '.join(missing)}; run `smart-search diagnose search answer`")
-            provider = OpenAICompatibleSearchProvider(config.openai_compatible_api_url or "", config.openai_compatible_api_key or "", config.openai_compatible_model, config.openai_compatible_stream)
-        raw = await _await_operation(provider.search(query), start=start, timeout=budget)
-        content, sources = split_answer_and_sources(str(raw))
-        if not content:
-            return _operation_envelope("search", "answer", ok=False, start=start, error_type="provider_error", error="Grok returned empty content")
-        return _operation_envelope("search", "answer", ok=True, start=start, content=content, sources=sources, extra={"provider": transport, "provider_operation": "web answer"}, debug=debug)
-    except ValueError as exc:
-        return _operation_envelope("search", "answer", ok=False, start=start, error_type="config_error", error=str(exc))
+        provider = ResponsesSearchProvider(
+            config.search_answer_api_url or "",
+            config.search_answer_api_key or "",
+            config.search_answer_model or "",
+            tools,
+            timeout=budget,
+        )
+        answer = await _await_operation(provider.search(query), start=start, timeout=budget)
+        content = answer.content
+        if config.output_cleanup_enabled:
+            content = sanitize_answer_text(content) or content
+        return _operation_envelope("search", "answer", ok=True, start=start, content=content, sources=answer.sources, extra=extra, debug=debug)
     except Exception as exc:
         error_type, error = _operation_exception(exc)
-        return _operation_envelope("search", "answer", ok=False, start=start, error_type=error_type, error=error, extra={"provider": transport}, debug=debug)
+        if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in {404, 405}:
+            error = f"{error} (the endpoint may not support POST /responses)"
+        return _operation_envelope("search", "answer", ok=False, start=start, error_type=error_type, error=error, extra=extra, debug=debug)
 
 
 async def search_sources(
@@ -528,14 +525,12 @@ def _operation_configured(operation: str) -> tuple[bool, list[str], str]:
     profile = OPERATION_PROFILES[operation]
     provider = str(profile["responsible_provider"])
     if operation == "search.answer":
+        missing = config.search_answer_missing_config()
         try:
-            transport = config.grok_transport
+            config.parse_search_answer_tools()
         except ValueError as exc:
-            return False, ["SMART_SEARCH_GROK_TRANSPORT"], str(exc)
-        required = ["XAI_API_KEY"] if transport == "xai-responses" else ["OPENAI_COMPATIBLE_API_URL", "OPENAI_COMPATIBLE_API_KEY", "OPENAI_COMPATIBLE_MODEL"]
-        values = {"XAI_API_KEY": config.xai_api_key, "OPENAI_COMPATIBLE_API_URL": config.openai_compatible_api_url, "OPENAI_COMPATIBLE_API_KEY": config.openai_compatible_api_key, "OPENAI_COMPATIBLE_MODEL": config.openai_compatible_model}
-        missing = [key for key in required if not values[key]]
-        return not missing, missing, transport
+            return False, [*missing, "SEARCH_ANSWER_TOOLS"], str(exc)
+        return not missing, missing, (config.search_answer_migration_hint() if missing else "") or provider
     if operation == "docs.search":
         missing = [] if config.context7_api_key or config.zhipu_mcp_api_key else ["CONTEXT7_API_KEY or ZHIPU_MCP_API_KEY"]
         return not missing, missing, provider
@@ -562,10 +557,6 @@ async def diagnose_provider(provider: str, *, live: bool = False, timeout_second
     return {"ok": configured, "provider": provider, "operations": operations, "configured": configured, "live_checked": False, "note": "Use operation smoke commands for real requests." if not live else "Live provider diagnosis is performed through operation smoke tests.", "timeout_seconds": timeout_seconds}
 
 
-async def diagnose_openai_compatible(timeout_seconds: float = 30.0) -> dict[str, Any]:
-    return await diagnose_provider("openai-compatible", timeout_seconds=timeout_seconds)
-
-
 async def doctor() -> dict[str, Any]:
     start = time.time()
     info = config.get_config_info()
@@ -580,11 +571,11 @@ async def doctor() -> dict[str, Any]:
 
 
 def current_model() -> dict[str, Any]:
-    return {"ok": True, "grok_transport": config.grok_transport, "xai_model": config.xai_model, "openai_compatible_model": config.openai_compatible_model, "config_file": str(config.config_file)}
+    return {"ok": True, "search_answer_model": config.search_answer_model, "config_file": str(config.config_file)}
 
 
 def set_model(model: str) -> dict[str, Any]:
-    return {"ok": False, "error_type": "parameter_error", "error": "Use `smart-search config set XAI_MODEL <model>` or `smart-search config set OPENAI_COMPATIBLE_MODEL <model>`.", "config_file": str(config.config_file)}
+    return {"ok": False, "error_type": "parameter_error", "error": "Use `smart-search config set SEARCH_ANSWER_MODEL <model>`.", "config_file": str(config.config_file)}
 
 
 def config_path() -> dict[str, Any]:

@@ -96,18 +96,19 @@ def test_legacy_provider_commands_are_removed():
 
 
 def test_config_uses_fixed_provider_keys(monkeypatch):
-    monkeypatch.delenv("SMART_SEARCH_GROK_TRANSPORT", raising=False)
     monkeypatch.delenv("EXA_SEARCH_TYPE", raising=False)
     config = _fresh_config(monkeypatch)
-    assert config.grok_transport == "openai-compatible"
+    assert config.parse_search_answer_tools() == ["web_search"]
     assert config.exa_search_type == "auto"
     info = config.get_config_info()
-    assert info["SMART_SEARCH_GROK_TRANSPORT"] == "openai-compatible"
+    assert info["SEARCH_ANSWER_TOOLS"] == "web_search"
     assert info["EXA_SEARCH_TYPE"] == "auto"
     for removed in (
         "SMART_SEARCH_FALLBACK_MODE",
         "SMART_SEARCH_OPERATION_CONFIG",
         "OPENAI_COMPATIBLE_FALLBACK_MODELS",
+        "SMART_SEARCH_GROK_TRANSPORT",
+        "XAI_API_KEY",
         "TAVILY_API_KEY",
         "JINA_API_KEY",
         "ZHIPU_API_KEY",
@@ -123,21 +124,6 @@ def test_invalid_exa_search_type_is_rejected(monkeypatch, value):
     config = _fresh_config(monkeypatch)
     with pytest.raises(ValueError, match="EXA_SEARCH_TYPE"):
         _ = config.exa_search_type
-
-
-@pytest.mark.parametrize("value", ["xai-responses", "openai-compatible"])
-def test_grok_transport_tracks_config_source(monkeypatch, value):
-    monkeypatch.setenv("SMART_SEARCH_GROK_TRANSPORT", value)
-    config = _fresh_config(monkeypatch)
-    assert config.grok_transport == value
-    assert config.get_config_source("SMART_SEARCH_GROK_TRANSPORT") == "environment"
-
-
-def test_invalid_grok_transport_is_rejected(monkeypatch):
-    monkeypatch.setenv("SMART_SEARCH_GROK_TRANSPORT", "auto")
-    config = _fresh_config(monkeypatch)
-    with pytest.raises(ValueError, match="SMART_SEARCH_GROK_TRANSPORT"):
-        _ = config.grok_transport
 
 
 def test_operation_timeouts_only_accept_known_operations(monkeypatch):
@@ -160,7 +146,7 @@ def test_operation_timeouts_only_accept_known_operations(monkeypatch):
 def test_operation_descriptors_have_one_responsible_provider():
     profiles = service.operation_profiles()
     expected = {
-        "search.answer": "grok",
+        "search.answer": "responses",
         "search.sources": "exa",
         "docs.resolve": "context7",
         "docs.search": "context7-or-zread",
@@ -243,33 +229,6 @@ async def test_exa_search_uses_native_type_and_public_filters(monkeypatch):
             "category": "research paper",
         }
     ]
-
-
-@pytest.mark.asyncio
-async def test_search_answer_only_uses_selected_grok_transport(monkeypatch):
-    calls = []
-
-    class FakeXAI:
-        def __init__(self, *args, **kwargs):
-            calls.append("xai-init")
-
-        async def search(self, query):
-            calls.append("xai-search")
-            return "answer"
-
-    class ForbiddenOpenAI:
-        def __init__(self, *args, **kwargs):
-            raise AssertionError("OpenAI-compatible fallback attempted")
-
-    monkeypatch.setenv("SMART_SEARCH_GROK_TRANSPORT", "xai-responses")
-    monkeypatch.setenv("XAI_API_KEY", "xai-key")
-    monkeypatch.setenv("OPENAI_COMPATIBLE_API_URL", "https://relay.example/v1")
-    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "relay-key")
-    monkeypatch.setattr(service, "XAIResponsesSearchProvider", FakeXAI)
-    monkeypatch.setattr(service, "OpenAICompatibleSearchProvider", ForbiddenOpenAI)
-    result = await service.search_answer("q")
-    assert result["ok"] is True
-    assert calls == ["xai-init", "xai-search"]
 
 
 @pytest.mark.asyncio

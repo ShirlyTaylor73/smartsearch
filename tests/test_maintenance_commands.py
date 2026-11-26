@@ -5,9 +5,9 @@ from smart_search import cli, service
 
 def test_setup_only_accepts_minimal_provider_options():
     parser = cli.build_parser()
-    args = parser.parse_args(["setup", "--non-interactive", "--grok-transport", "xai-responses", "--exa-search-type", "auto"])
-    assert args.grok_transport == "xai-responses"
-    for removed in ("--tavily-key", "--jina-key", "--zhipu-key", "--fallback-mode", "--operation-config"):
+    args = parser.parse_args(["setup", "--non-interactive", "--search-answer-tools", "web_search,x_search", "--exa-search-type", "auto"])
+    assert args.search_answer_tools == "web_search,x_search"
+    for removed in ("--grok-transport", "--xai-api-key", "--openai-compatible-api-key", "--tavily-key", "--jina-key", "--zhipu-key", "--fallback-mode", "--operation-config"):
         with pytest.raises(SystemExit):
             parser.parse_args(["setup", removed, "value"])
 
@@ -47,7 +47,9 @@ async def test_doctor_lists_every_public_operation():
 
 def test_diagnose_provider_choices_are_minimal_set():
     parser = cli.build_parser()
-    for provider in ("xai-responses", "openai-compatible", "exa", "context7", "zhipu-mcp-zread", "firecrawl"):
+    for provider in ("responses", "exa", "context7", "zhipu-mcp-zread", "firecrawl"):
         assert parser.parse_args(["diagnose", "provider", provider]).provider == provider
     with pytest.raises(SystemExit):
         parser.parse_args(["diagnose", "provider", "tavily"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["diagnose", "provider", "openai-compatible"])
