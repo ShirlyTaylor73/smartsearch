@@ -1,20 +1,24 @@
 # Smart Search
 
-`smart-search` 是面向 AI Agent 的确定性检索 CLI。Agent 只选择任务命令；每个 operation 的 provider 固定，凭据和 endpoint 由维护者配置，不存在跨 provider fallback。
+面向 AI Agent 的检索 CLI。按任务选择命令，每个命令固定使用一个 provider，失败时直接返回错误。
+
+[English](README.md)
 
 ## 安装
 
-日常执行搜索命令时，全局安装 CLI：
+需要 Node.js 18+ 和 Python 3.10+。
 
 ```bash
-npm install -g @shirlytaylor73/smart-search@latest
-smart-search --version
+npm install -g @shirlytaylor73/smart-search
 smart-search setup
+smart-search doctor
 ```
 
-交互式 `smart-search setup` 依次询问 `search answer` 的地址、API key 和模型，使用方向键选择 skill scope，Agent 目标使用空格多选，确认操作使用 Y/N；API key 输入会隐藏。向导会逐项确认已有配置，默认保留，并在最终确认后统一保存配置和安装 bundled Agent skill。
+## 配置
 
-环境变量中的配置会标记为外部管理，不会被复制进配置文件。Esc/Ctrl-C 会在写入前取消并返回退出码 130。管道、CI 等非 TTY 环境不会退回到手输菜单，应使用显式参数：
+`smart-search setup` 交互式填写各项配置，并可安装 Agent skill。重跑时默认保留已有值；从旧版升级时，会询问是否沿用旧的 `search answer` 配置。
+
+脚本或 CI 中使用非交互模式：
 
 ```bash
 smart-search setup --non-interactive \
@@ -23,162 +27,133 @@ smart-search setup --non-interactive \
   --search-answer-model "<模型名>"
 ```
 
-非交互模式默认不发起任何请求；加 `--probe-tools` 会检测搜索工具支持情况，但只报告结果，不改写 `SEARCH_ANSWER_TOOLS`。
-
-也可使用本包自己的 `npx` 命令单独安装 skill，无需预先全局安装 CLI：
-
-```bash
-npx --yes --package=@shirlytaylor73/smart-search@latest \
-  smart-search skills install --project --agent codex --yes
-```
-
-项目级安装将实体文件保存到 `<project>/.agents/skills/smart-search-cli/`，其他 Agent 目录默认通过链接指向该目录。多 Agent 安装：
-
-```bash
-npx --yes --package=@shirlytaylor73/smart-search@latest \
-  smart-search skills install --project \
-  --agent codex --agent claude --agent cursor --yes
-```
-
-全局安装使用 `--global`，canonical 目录为 `~/.agents/skills/smart-search-cli/`。Windows 优先使用 directory junction；链接不可用时自动降级为复制，也可用 `--copy` 显式选择复制。
-
-当前 target：`codex`、`claude`、`cursor`、`opencode`、`copilot`、`gemini`、`kiro`、`qoder`、`codebuddy`、`droid`、`pi`、`kilo`、`antigravity`、`windsurf`、`hermes`。
-
-独立管理命令：
-
-```bash
-smart-search skills install       # 方向键/空格交互选择
-smart-search skills status --project --agent codex --yes
-smart-search skills update --project --agent codex --yes
-smart-search skills uninstall --project --agent codex --yes
-```
-
-`skills install|update|uninstall|status` 共用相同的 scope 和 Agent 选择界面。非 TTY 环境使用 `--project`/`--global`、一个或多个 `--agent`，变更操作再加 `--yes`。
-
-Python 源码位于 `src/smart_search/`；npm 包只是跨平台启动包装器，安装时创建 Python 环境并调用 `python -m smart_search.cli`。
-
-## 命令与唯一 Provider
-
-| 命令 | 唯一 Provider / Tool |
-|---|---|
-| `search answer QUERY` | 流式 Responses API（`POST {base_url}/responses`），固定带搜索工具 |
-| `search sources QUERY` | Exa Search `/search` |
-| `docs resolve NAME [QUERY]` | Context7 `/api/v2/libs/search` |
-| 普通 `docs search QUERY` | Context7 `/api/v3/search`，自动选择文档库 |
-| `docs search QUERY --source /owner/library` | Context7 `/api/v2/context`，指定文档库 |
-| `docs search QUERY --source owner/repo` | Zhipu MCP ZRead `search_doc` |
-| `docs tree REPO [--path PATH]` | ZRead `get_repo_structure` |
-| `docs read REPO PATH` | ZRead `read_file` |
-| `fetch content URL` | Firecrawl Scrape Markdown |
-| `fetch extract URL` | Firecrawl Scrape JSON |
-| `map site URL` | Firecrawl Map |
-
-```bash
-smart-search search answer "今天 AI Agent 有什么重要新闻？" --format markdown
-smart-search search sources "agent context retrieval" --limit 5 --include-highlights
-smart-search docs resolve nextjs "app router"
-smart-search docs search "最近的重要 PR" --source owner/repo
-smart-search docs tree owner/repo --path src
-smart-search docs read owner/repo README.md --format content
-smart-search fetch content https://example.com/article --format content
-smart-search fetch extract https://www.python.org/downloads/ --prompt "提取最新的 Python 3 正式版本"
-smart-search fetch extract https://example.com/product --schema '{"type":"object","properties":{"name":{"type":"string"}}}'
-smart-search map site https://docs.example.com --search authentication --sitemap include --limit 50
-```
-
-`fetch extract` 至少需要 `--prompt` 或 `--schema` 之一，也可以同时提供。仅使用 prompt 时由 Firecrawl 推断输出结构，schema 用于约束结构。
-
-文档问题可直接通过 `docs search QUERY` 查询，在问题中写明产品名称。需要指定文档来源时，先运行 `docs resolve NAME [QUERY]` 选择 ID。Context7 ID 同时支持 `/owner/library/version` 和 `/owner/library@version`。文档结果提供原始来源 URL 和可读正文；Context7 返回版本信息时会一并保留。
-
-`map site` 默认使用 `sitemap=include`、包含子域名、忽略 query 参数、不忽略缓存、`limit=5000`。`--timeout` 单位为秒，内部转换为 Firecrawl 的毫秒；`--location` 接受 `{"country":"US","languages":["en-US"]}`。
-
-## 配置
-
-主要配置键：
-
-| Provider | 配置 |
-|---|---|
-| Responses（`search answer`） | `SEARCH_ANSWER_API_URL`、`SEARCH_ANSWER_API_KEY`、`SEARCH_ANSWER_MODEL`、`SEARCH_ANSWER_TOOLS` |
-| Exa | `EXA_API_KEY`、`EXA_BASE_URL`、`EXA_TIMEOUT_SECONDS`、`EXA_SEARCH_TYPE` |
-| Context7 | `CONTEXT7_API_KEY`、`CONTEXT7_BASE_URL`、`CONTEXT7_TIMEOUT_SECONDS` |
-| ZRead | `ZHIPU_MCP_API_KEY`、`ZHIPU_MCP_ZREAD_API_URL`、`ZHIPU_MCP_TIMEOUT_SECONDS` |
-| Firecrawl | `FIRECRAWL_API_KEY`、`FIRECRAWL_API_URL`、`FIRECRAWL_TIMEOUT_SECONDS` |
-
-### `search answer`
-
-xAI 官方、OpenAI 或中转站使用同一种请求，仅由配置区分：
-
-| 配置键 | 说明 |
-|---|---|
-| `SEARCH_ANSWER_API_URL` | 必填，base URL，请求发往其后的 `/responses`；xAI 官方为 `https://api.x.ai/v1` |
-| `SEARCH_ANSWER_API_KEY` | 必填 |
-| `SEARCH_ANSWER_MODEL` | 必填，原样发送，没有默认模型 |
-| `SEARCH_ANSWER_TOOLS` | 可选，逗号分隔的 `web_search`、`x_search`，默认 `web_search`。`x_search` 是 xAI 工具，不要用于其他厂商的模型 |
-
-每次请求固定使用 `stream=true` 和 `tool_choice="required"`。端点必须同时支持 `/responses`、所选工具和 `tool_choice`；不支持时如实报错，不会改走 `/chat/completions`，也不会去掉参数重试。`tool_choice="required"` 只要求模型调用工具，不保证回答和引用正确，重要结论仍应用 `fetch content` 核对来源。回答来源取自接口返回的 `url_citation` 标注。
-
-`--timeout` 显式传值时按该值生效；未传时使用 `SMART_SEARCH_OPERATION_TIMEOUTS` 中的 `search.answer`，缺省 120 秒。`--debug` 输出脱敏的 `debug` 对象，包括工具调用次数、响应状态、token 用量和请求尝试记录。
-
-### 搜索工具检测
-
-交互式 `setup`（首次和重跑相同）先保存配置，再分别检测 `web_search` 和 `x_search`。建议值与当前值不同时会先询问，确认后才修改。只有请求完成且返回了工具调用记录才判为支持；超时、限流、鉴权失败或没有调用记录一律为 `unknown`，不会自动改配置。检测失败不影响已保存的配置。
-
-```bash
-smart-search doctor --probe-tools   # 只读复测，不修改配置
-```
-
-检测会发起真实请求并可能计费；X 搜索按抓取的帖子和用户资料计费。直接编辑或导入配置文件即时生效，`search answer` 运行时不做检测，也不改写配置。
-
-`EXA_SEARCH_TYPE` 允许 `instant|fast|auto|deep-lite|deep|deep-reasoning`，默认 `auto`。`SMART_SEARCH_OPERATION_TIMEOUTS` 只允许配置已知 operation 的总超时，例如：
-
-```json
-{"search.answer":120,"map.site":180}
-```
-
-配置优先级为环境变量高于配置文件。查看位置和脱敏配置：
+也可以单独读写配置项。环境变量优先于配置文件。
 
 ```bash
 smart-search config path
-smart-search config list
-smart-search doctor
-smart-search doctor --probe-tools
-smart-search diagnose search sources
-smart-search diagnose provider firecrawl
+smart-search config list                  # 密钥脱敏显示
+smart-search config set EXA_API_KEY <key>
+smart-search config unset EXA_API_KEY
 ```
 
-唯一 provider 缺失或失败时立即返回 `config_error`、`parameter_error`、`auth_error`、`rate_limited`、`timeout`、`network_error`、`parse_error` 或 `provider_error`，不会尝试其他 provider。
+| 用途 | 必填 | 可选 |
+|---|---|---|
+| `search answer` | `SEARCH_ANSWER_API_URL`、`SEARCH_ANSWER_API_KEY`、`SEARCH_ANSWER_MODEL` | `SEARCH_ANSWER_TOOLS` |
+| `search sources` | `EXA_API_KEY` | `EXA_BASE_URL`、`EXA_SEARCH_TYPE`、`EXA_TIMEOUT_SECONDS` |
+| `docs resolve`、`docs search` | `CONTEXT7_API_KEY` | `CONTEXT7_BASE_URL`、`CONTEXT7_TIMEOUT_SECONDS` |
+| GitHub 仓库的 `docs` 命令 | `ZHIPU_MCP_API_KEY` | `ZHIPU_MCP_ZREAD_API_URL`、`ZHIPU_MCP_TIMEOUT_SECONDS` |
+| `fetch`、`map` | `FIRECRAWL_API_KEY` | `FIRECRAWL_API_URL`、`FIRECRAWL_TIMEOUT_SECONDS` |
 
-## `search answer` 配置迁移
+- `SEARCH_ANSWER_API_URL`：支持 Responses API 的 base URL，可以是 xAI 官方（`https://api.x.ai/v1`）、OpenAI 或中转站。端点需要支持 `/responses`、所选搜索工具和 `tool_choice`。
+- `SEARCH_ANSWER_TOOLS`：`web_search`（默认）、`x_search`，逗号分隔。`x_search` 仅适用于 Grok。
+- `EXA_SEARCH_TYPE`：`auto`（默认）、`instant`、`fast`、`deep-lite`、`deep`、`deep-reasoning`。
+- `SMART_SEARCH_OPERATION_TIMEOUTS`：各命令的总超时（秒），如 `{"search.answer":300,"map.site":180}`。
 
-旧的两个通道已合并。`SMART_SEARCH_GROK_TRANSPORT`、`OPENAI_COMPATIBLE_*` 和 `XAI_*` 在运行时不再读取。
+### 搜索工具检测
 
-| 旧键 | 新键 |
-|---|---|
-| `OPENAI_COMPATIBLE_API_URL` / `XAI_API_URL` | `SEARCH_ANSWER_API_URL`（原来依赖 xAI 默认地址的需显式填写 `https://api.x.ai/v1`） |
-| `OPENAI_COMPATIBLE_API_KEY` / `XAI_API_KEY` | `SEARCH_ANSWER_API_KEY` |
-| `OPENAI_COMPATIBLE_MODEL` / `XAI_MODEL` | `SEARCH_ANSWER_MODEL` |
-| `XAI_TOOLS` | `SEARCH_ANSWER_TOOLS`（默认值变为 `web_search`） |
-| `SMART_SEARCH_GROK_TRANSPORT`、`OPENAI_COMPATIBLE_STREAM` | 删除 |
+交互式 `setup` 保存配置后会检测 `web_search` 和 `x_search`，修改工具列表前先询问。之后可用 `smart-search doctor --probe-tools` 复测，此命令不修改配置。非交互模式默认不检测，加 `--probe-tools` 后只报告结果。
 
-交互式 `smart-search setup` 会读取配置文件中旧版实际生效的那一套（按 `SMART_SEARCH_GROK_TRANSPORT` 判断），逐项询问是否沿用；工具列表不迁移，由检测给出建议。旧键保留在文件中，以便旧版本继续使用；确认不再需要后可用 `config unset` 清理。非交互模式和环境变量需要手动改用新键。
+检测会发送真实请求，可能计费。
 
-只支持 `/chat/completions` 的服务不再可用。不再自动给 OpenRouter 地址的模型名追加 `:online`。
+## 命令
 
-## 0.3.0 迁移
+| 命令 | 用途 | Provider |
+|---|---|---|
+| `search answer QUERY` | 联网搜索并回答 | Responses API |
+| `search sources QUERY` | 查找来源链接 | Exa |
+| `docs resolve NAME [QUERY]` | 查找文档库 ID | Context7 |
+| `docs search QUERY` | 搜索文档 | Context7；仓库来源用 ZRead |
+| `docs tree REPO` | 查看仓库目录 | ZRead |
+| `docs read REPO PATH` | 读取仓库文件 | ZRead |
+| `fetch content URL` | 网页转 Markdown | Firecrawl |
+| `fetch extract URL` | 提取结构化数据 | Firecrawl |
+| `map site URL` | 列出站点链接 | Firecrawl |
 
-| 旧契约 | 新契约 |
-|---|---|
-| 多 provider 顺序、feature negotiation、fallback | 删除；每个 operation 固定 executor |
-| `search similar` / `exa-similar` | 删除；Exa `findSimilar` 已 deprecated，无语义等价转发 |
-| `search sources --mode` | 删除；维护者用 `EXA_SEARCH_TYPE` |
-| `docs tree/read --ref` | 删除；ZRead 当前 schema 不支持 ref |
-| Tavily `map --instructions/--max-depth/--max-breadth` | 使用 Firecrawl `--search`、`--sitemap`、subdomain/query/cache/location 参数 |
-| Tavily、Jina、Zhipu REST、Zhipu MCP Search/Reader、DeepWiki | 删除 |
-| `SMART_SEARCH_FALLBACK_MODE`、`SMART_SEARCH_OPERATION_CONFIG`、`OPENAI_COMPATIBLE_FALLBACK_MODELS` | 删除；旧配置键读取时忽略，可用 `config unset` 手动清理旧文件 |
+以上命令都支持 `--format json|markdown|content`（默认 `json`）、`--output FILE` 和 `--debug`。完整参数见各命令的 `--help`。
 
-功能性命令仍包括 `setup`、`doctor`、`config path|list|set|unset`、`skills install|uninstall|status|update`、完整 `diagnose`、`dev regression`、`-h/--help` 和 `-v/--version`。
+### search
 
-## 验证
+```bash
+smart-search search answer "今天 AI Agent 有什么重要新闻？" --format markdown
+smart-search search answer "梳理某方向的相关工作" --timeout 300
+
+smart-search search sources "agent context retrieval" --limit 5 --include-highlights
+```
+
+- `answer`：默认超时 120 秒，复杂问题可用 `--timeout` 放宽。每次都会调用搜索工具，重要结论请用 `fetch content` 核对来源。
+- `sources`：支持 `--include-domains`、`--exclude-domains`、`--start-published-date`、`--category`、`--include-text`、`--include-highlights`。
+
+### docs
+
+```bash
+smart-search docs search "Next.js app router 如何做缓存"
+
+smart-search docs resolve nextjs "app router"
+smart-search docs search "app router" --source /vercel/next.js
+
+smart-search docs search "最近的重要 PR" --source owner/repo
+smart-search docs tree owner/repo --path src
+smart-search docs read owner/repo README.md --format content
+```
+
+`--source /owner/library` 指定 Context7 文档库，版本可写作 `/owner/library/version` 或 `/owner/library@version`。`--source owner/repo`（无开头斜杠）搜索 GitHub 仓库。
+
+### fetch
+
+```bash
+smart-search fetch content https://example.com/article --format content
+
+smart-search fetch extract https://www.python.org/downloads/ --prompt "提取最新的 Python 3 版本"
+smart-search fetch extract https://example.com/product \
+  --schema '{"type":"object","properties":{"name":{"type":"string"}}}'
+```
+
+`extract` 需要 `--prompt` 或 `--schema`，两者可同时使用。
+
+### map
+
+```bash
+smart-search map site https://docs.example.com --search authentication --limit 50
+```
+
+默认读取 sitemap、包含子域名、忽略 query 参数，最多返回 5000 条。可用 `--sitemap include|skip|only`、`--no-include-subdomains`、`--no-ignore-query-parameters`、`--ignore-cache`、`--timeout` 和 `--location '{"country":"US","languages":["en-US"]}'` 调整。
+
+## 排障
+
+```bash
+smart-search doctor                       # 检查各命令的配置状态
+smart-search doctor --probe-tools         # 实测搜索工具支持情况
+smart-search diagnose search answer       # 检查单个命令的配置
+smart-search diagnose provider firecrawl  # 检查单个 provider 的配置
+smart-search search answer "测试" --debug  # 查看请求详情和工具调用次数
+```
+
+失败结果中的 `error_type`：`config_error`、`parameter_error`、`auth_error`、`rate_limited`、`timeout`、`network_error`、`parse_error`、`provider_error`。
+
+## Agent skill
+
+无需全局安装 CLI，可直接安装 skill：
+
+```bash
+npx @shirlytaylor73/smart-search skills install --project --agent codex --yes
+```
+
+全局安装 CLI 后：
+
+```bash
+smart-search skills install        # 交互选择范围和 Agent
+smart-search skills install --global --agent codex --agent claude --yes
+smart-search skills status --global --agent codex --yes
+smart-search skills update --global --agent codex --yes
+smart-search skills uninstall --global --agent codex --yes
+```
+
+- `--project` 安装到当前项目的 `.agents/skills/`，`--global` 安装到 `~/.agents/skills/`。其他 Agent 目录通过链接指向这里；加 `--copy` 改为复制。
+- 支持的 Agent：`codex`、`claude`、`cursor`、`opencode`、`copilot`、`gemini`、`kiro`、`qoder`、`codebuddy`、`droid`、`pi`、`kilo`、`antigravity`、`windsurf`、`hermes`。
+
+## 开发
+
+源码位于 `src/smart_search/`，npm 包负责创建 Python 环境并启动 CLI。
 
 ```bash
 python -m compileall -q src tests
@@ -186,5 +161,3 @@ python -m pytest tests -q
 npm test
 smart-search diagnose smoke --mode mock
 ```
-
-当前稳定版为 `0.3.4`，npm dist-tag 使用 `latest`。

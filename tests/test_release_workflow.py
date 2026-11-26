@@ -97,25 +97,18 @@ def test_publish_workflow_uses_manual_beta_tag_stable_and_trusted_publishing():
     assert "--prerelease" in workflow
 
 
-def test_release_docs_explain_new_package_and_migration():
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    readme_zh = (ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
-
-    required_markers = ["@shirlytaylor73/smart-search@latest", "Python", "0.3.0", "Exa", "Firecrawl"]
-    for marker in required_markers:
-        assert marker in readme
-
-    zh_required_markers = ["@shirlytaylor73/smart-search@latest", "Python", "0.3.0", "Exa", "Firecrawl"]
-    for marker in zh_required_markers:
-        assert marker in readme_zh
-
-    npx_markers = [
-        "npx --yes --package=@shirlytaylor73/smart-search@latest",
-        "smart-search skills install --project --agent codex --yes",
+def test_readmes_explain_installation():
+    required_markers = [
+        "npm install -g @shirlytaylor73/smart-search",
+        "npx @shirlytaylor73/smart-search skills install --project --agent codex --yes",
+        "Python",
+        "Exa",
+        "Firecrawl",
     ]
-    for marker in npx_markers:
-        assert marker in readme
-        assert marker in readme_zh
+    for name in ("README.md", "README.zh-CN.md"):
+        text = (ROOT / name).read_text(encoding="utf-8")
+        for marker in required_markers:
+            assert marker in text
 
 
 def test_npx_skill_installation_is_part_of_package_validation():
